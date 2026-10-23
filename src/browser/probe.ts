@@ -64,5 +64,5 @@ export async function probePage(expectedIdentity: string, frameUrl: string | nul
   const classification: PageClassification = login ? 'login_challenge' : relevant >= 2 ? 'application' : listing ? 'listing' : job.test(context) || frames.length || !context.trim() ? 'uncertain' : 'irrelevant';
   const heading = headings.find((h) => !/^(apply|application|careers|jobs|job application)$/i.test(h));
   const parts = (heading ?? '').split(/\s+(?:at|@)\s+/i);
-  return { classification, identity, role: job.test(context) && parts.length === 2 ? text(parts[0]) : null, company: job.test(context) && parts.length === 2 ? text(parts[1]) : null, frames: classification === 'application' || login ? [] : frames };
+  return { classification, identity, role: job.test(context) && parts.length === 2 ? text(parts[0]) : null, company: job.test(context) && parts.length === 2 ? text(parts[1]) : null, frames: login ? [] : frames };
 }

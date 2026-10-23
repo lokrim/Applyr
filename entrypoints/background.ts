@@ -9,6 +9,7 @@ import { DocumentStore } from '../src/storage/documents';
 import { capturedTarget } from '../src/browser/targets';
 import { originPattern } from '../src/browser/addresses';
 import { probePage } from '../src/browser/probe';
+import { inspectForm } from '../src/forms/inspect';
 import { PageAccessService } from '../src/runtime/page-access';
 import { restrictPreferenceAccess } from '../src/browser/surfaces';
 
@@ -22,6 +23,15 @@ export default defineBackground({
       changed: () => { const channel = new BroadcastChannel('applyr-target'); channel.postMessage('changed'); channel.close(); },
       contains: (origin) => browser.permissions.contains({ origins: [originPattern(origin, import.meta.env.DEV)] }),
       createTab: (url) => browser.tabs.create({ url, active: true }),
+      inspect: async (tabId, identity, frame, selection) => {
+        const results = await browser.scripting.executeScript({
+          target: frame ? { tabId, allFrames: true } : { tabId, frameIds: [0] },
+          world: 'ISOLATED', func: inspectForm, args: [identity, frame?.url ?? null, selection ?? null],
+        });
+        const found = results.filter((r) => r.result !== null && r.result !== undefined);
+        // Identical duplicated frame URLs are ambiguous too; never choose one.
+        return found.length === 1 ? { result: found[0]!.result, documentId: found[0]!.documentId, frameId: found[0]!.frameId } : null;
+      },
       probe: async (tabId, identity, frame) => {
         // Chrome may reject allFrames if any other frame lacks permission. We
         // then offer opening the embedded application directly; never broaden.

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { SessionCheckpoint } from '../domain/session';
 import { parseApplicationUrl, sanitizedUrl } from '../browser/addresses';
+import { InspectionSchema, SelectionSchema } from '../forms/schema';
 
 const integer = z.number().int().nonnegative();
 const uuid = z.string().uuid();
@@ -56,13 +57,15 @@ export const RequestSchema = z.discriminatedUnion('type', [
   z.strictObject({ ...envelope, type: z.literal('PROBE_TARGET'), sessionId: uuid, revision: integer, frameOrigin: origin.optional(), frameIdentity: z.string().regex(/^[a-f0-9]{64}$/).optional() })
     .refine((r) => (r.frameOrigin === undefined) === (r.frameIdentity === undefined)),
   z.strictObject({ ...envelope, type: z.literal('EDIT_TARGET'), sessionId: uuid, revision: integer, role: z.string().max(180), company: z.string().max(180) }),
+  z.strictObject({ ...envelope, type: z.literal('INSPECT_FORM'), sessionId: uuid, revision: integer, frameOrigin: origin.optional(), frameIdentity: z.string().regex(/^[a-f0-9]{64}$/).optional(), selection: SelectionSchema.optional() })
+    .refine((r) => (r.frameOrigin === undefined) === (r.frameIdentity === undefined)),
   z.strictObject({ ...envelope, ...binding, type: z.literal('OPEN_APPLICATION'), url: z.string().max(4096) }),
 ]);
 export type Request = z.infer<typeof RequestSchema>;
 
 export const ResponseSchema = z.discriminatedUnion('ok', [
   z.strictObject({
-    schemaVersion: z.literal(1), requestId: uuid, ok: z.literal(true), checkpoint: CheckpointSchema.nullable(),
+    schemaVersion: z.literal(1), requestId: uuid, ok: z.literal(true), checkpoint: CheckpointSchema.nullable(), inspection: InspectionSchema.optional(),
   }),
   z.strictObject({
     schemaVersion: z.literal(1), requestId: uuid.nullable(), ok: z.literal(false),

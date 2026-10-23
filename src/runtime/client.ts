@@ -14,11 +14,15 @@ const errors = {
 } as const;
 
 export async function sendIntent(intent: Intent) {
+  return (await sendRequest(intent)).checkpoint;
+}
+
+export async function sendRequest(intent: Intent) {
   const request = RequestSchema.parse({ ...intent, schemaVersion: 1, requestId: crypto.randomUUID() });
   const response = ResponseSchema.parse(await browser.runtime.sendMessage(request));
   if (response.requestId !== request.requestId) throw new Error('The extension response could not be verified. Reload this page.');
   if (!response.ok) throw new Error(errors[response.code]);
-  return response.checkpoint;
+  return response;
 }
 
 export function readCheckpoint() { return sendIntent({ type: 'GET_STATE', sessionId: null, revision: null }); }

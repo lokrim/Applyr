@@ -3,12 +3,14 @@ import { createCheckpoint } from '../domain/session';
 import { displayText, originPattern, parseApplicationUrl, sanitizedUrl } from '../browser/addresses';
 import { ProbeSchema } from './schemas';
 import { CheckpointStore, StaleCheckpointError } from '../storage/checkpoints';
+import { FormSnapshotSchema, InspectionSchema, type FormSelection } from '../forms/schema';
 
 type Binding = { sessionId: string | null; revision: number | null };
 export interface PageDependencies {
   store: () => Promise<CheckpointStore>;
   target: (tabId: number) => Promise<TargetReference>;
   probe: (tabId: number, identity: string, frame?: { url: string; identity: string }) => Promise<{ result: unknown; documentId?: string } | null>;
+  inspect?: (tabId: number, identity: string, frame?: { url: string; identity: string }, selection?: FormSelection) => Promise<{ result: unknown; documentId?: string; frameId: number } | null>;
   contains: (origin: string) => Promise<boolean>;
   createTab: (url: string) => Promise<{ id?: number; windowId: number }>;
   now: () => number;
@@ -96,6 +98,24 @@ export class PageAccessService {
   async edit(binding: Binding, role: string, company: string) {
     const checkpoint = await this.current(binding);
     return this.write(checkpoint, checkpoint.access ?? initialAccess(checkpoint.target), { ...checkpoint.target, role: displayText(role), company: displayText(company) });
+  }
+
+  async inspect(binding: Binding, frameOrigin?: string, frameIdentity?: string, selection?: FormSelection) {
+    const checkpoint = await this.verify(await this.current(binding));
+    if (!this.deps.inspect || !checkpoint.target.identity || !checkpoint.target.origin || ['restart', 'navigation', 'closed', 'permission', 'reload'].includes(checkpoint.access?.reason ?? '')) throw new Error('ACCESS_UNAVAILABLE');
+    const frame = frameOrigin ? checkpoint.access?.frames.find((f) => f.origin === frameOrigin && f.identity === frameIdentity) : undefined;
+    if (frameOrigin && (!frame || (frameOrigin !== checkpoint.target.origin && !await this.deps.contains(frameOrigin)))) throw new Error('ACCESS_UNAVAILABLE');
+    let injected;
+    try { injected = await this.deps.inspect(checkpoint.target.tabId, frame?.identity ?? checkpoint.target.identity, frame, selection); }
+    catch { throw new Error('ACCESS_UNAVAILABLE'); }
+    const snapshot = FormSnapshotSchema.safeParse(injected?.result);
+    if (!snapshot.success || snapshot.data.identity !== (frame?.identity ?? checkpoint.target.identity)) throw new Error('ACCESS_UNAVAILABLE');
+    await this.current(binding); // Discard a result racing a checkpoint/tab event.
+    const observed = await this.deps.target(checkpoint.target.tabId);
+    if (observed.identity !== checkpoint.target.identity || observed.origin !== checkpoint.target.origin) throw new Error('ACCESS_UNAVAILABLE');
+    if (frame && frame.origin !== checkpoint.target.origin && !await this.deps.contains(frame.origin)) throw new Error('ACCESS_UNAVAILABLE');
+    // Snapshots never enter checkpoints, IndexedDB, preferences, or history.
+    return { checkpoint, inspection: InspectionSchema.parse({ sessionId: checkpoint.id, tabId: checkpoint.target.tabId, frameId: injected!.frameId, browserDocumentId: injected!.documentId ?? null, snapshot: snapshot.data }) };
   }
 
   async open(binding: Binding, raw: string) {

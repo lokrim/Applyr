@@ -4,10 +4,11 @@ import type { SessionCheckpoint } from '../domain/session';
 import { parseApplicationUrl } from '../browser/addresses';
 import { requestPageOrigin } from '../browser/page-permissions';
 import { sendIntent } from '../runtime/client';
+import { FormInspection } from './FormInspection';
 
 const guidance = {
   unprobed: 'Inspect this bound page to detect an application. No fields will be filled.',
-  application: 'Application form detected. This probe only reads form metadata. Autofill is not available yet.',
+  application: 'Application form detected. Use Inspect fields to review a scoped snapshot. Autofill is not available yet.',
   listing: 'Careers listing detected. Open the specific job application, then invoke applyr there.',
   login_challenge: 'Complete login or the security challenge on the website, then reinspect. applyr never reads passwords or one-time codes.',
   irrelevant: 'This does not appear to be a job application. Open an application URL or invoke applyr on the intended form.',
@@ -43,7 +44,7 @@ export function TargetWorkspace({ checkpoint, onChange }: { checkpoint: SessionC
   }
 
   return <section className="card target-workspace" aria-labelledby="page-heading">
-    <div className="section-heading"><h2 id="page-heading">Application page</h2><span className="pill" aria-live="polite" data-testid="page-status">{checkpoint?.access?.status === 'needs_attention' ? 'Needs attention' : checkpoint?.access?.status === 'ready' ? 'Read-only probe ready' : 'Not inspected'}</span></div>
+    <div className="section-heading"><h2 id="page-heading">Application page</h2><span className="pill" aria-live="polite" data-testid="page-status">{checkpoint?.access?.status === 'needs_attention' ? 'Needs attention' : checkpoint?.access?.status === 'ready' ? 'Page access ready' : 'Not inspected'}</span></div>
     {checkpoint && <>
       <p className="target" data-testid="target-url">{checkpoint.target.url ?? 'URL unknown or restricted'}</p>
       <p data-testid="target-title">{checkpoint.target.title ?? 'Title unknown'}</p>
@@ -77,6 +78,7 @@ export function TargetWorkspace({ checkpoint, onChange }: { checkpoint: SessionC
         }}>Inspect frame at {frame.origin}</button>
         <button className="secondary" disabled={busy} onClick={() => setUrl(frame.url)}>Use embedded URL</button>
       </div>)}
+      <FormInspection key={`${checkpoint.id}:${checkpoint.revision}`} checkpoint={checkpoint} />
     </>}
     <form onSubmit={(event) => {
       event.preventDefault();

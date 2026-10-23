@@ -1,6 +1,6 @@
 # applyr
 
-Local-first assistance for job applications. **Prompts 01–04 implement the extension shell, candidate profiles, local resume documents and scoped read-only page access.** Profile setup, safe Markdown import/export, explicit reusable defaults, versioned session inputs and PDF recovery work locally without AI. The page probe classifies the bound application without filling fields. Real-page autofill and provider integrations are not implemented.
+Local-first assistance for job applications. **Prompts 01–05 implement the extension shell, candidate profiles, local resume documents, scoped page access and read-only form inspection.** Profile setup, safe Markdown import/export, explicit reusable defaults, versioned session inputs and PDF recovery work locally without AI. The page detector classifies the bound application; Inspect fields shows a scoped snapshot without filling fields. Real-page autofill and provider integrations are not implemented.
 
 ## Local setup
 
@@ -47,6 +47,8 @@ The shell tests launch **real Playwright Chromium** with disposable persistent p
 
 Vitest uses in-memory IndexedDB and mocked surface APIs for storage/surface tests, and the actual YAML/Markdown libraries for parser tests. It covers both supplied examples, every v1 field, null/false/absence, malformed/oversized input, YAML restrictions, unknown-key repair, credentials, answer sections/references, dates, eligibility conflicts, v1→v2 migration, default/session isolation, expiry and compare-and-swap races. It also preserves foundation sender and surface checks. They are distinct from the real browser test. Future database upgrades must add a numbered migration and preserve or deliberately invalidate older records.
 
+Form inspection tests serve F01–F10 on two loopback HTTPS origins (127.0.0.1 and localhost), using ephemeral synthetic TLS certificates. They require local `openssl`, loopback listeners and Chromium launch permission. Fixture React code is compiled in memory with the installed Vite toolchain. The extension fixture copies unchanged production JavaScript and adds a test-only install grant for 127.0.0.1. Ordinary DOM tests separately poison authentication/cookie getters and control setters; test-driver uploads exercise only the owned F07 receiver. No fixture instrumentation ships in either production build. These fixtures prove patterns, not live ATS compatibility.
+
 ## Load production builds manually
 
 **Brave / Chromium**
@@ -89,7 +91,7 @@ The popup captures its original tab before opening another extension surface. Th
 
 **Open application** validates HTTPS, requests that exact origin during the click and creates a new tab and session binding. If permission is denied, invoke applyr on the new tab; access from the original tab is never transferred. This deliberate new binding releases previous temporary session inputs; saved defaults require explicit reselection. Navigation, reload, closure and revoked access leave visible attention guidance. A changed job, including on the same origin, requires a separate attachment through **Use this tab**. Restricted pages still allow settings and local input management.
 
-Only visible, application-labelled embedded frames are offered for inspection. Same-origin frames need no additional host request. A cross-origin frame requires its displayed origin and a reason. Chrome can refuse an all-frame injection if another frame is inaccessible; applyr then offers a direct-open/manual fallback without asking for broader access. Frame identity guards return before DOM inspection in unrelated frames. Detection is heuristic: custom widgets, shadow DOM and unrecognized challenges may remain uncertain. No autofill begins in this stage.
+Only visible, application-labelled embedded frames are offered for inspection. Same-origin frames need no additional host request. A cross-origin frame requires its displayed origin and a reason. Chrome can refuse an all-frame injection if another frame is inaccessible; applyr then offers a direct-open/manual fallback without asking for broader access. Frame identity guards return before DOM inspection in unrelated frames. Detection is heuristic: custom widgets, closed shadow roots and unrecognized challenges may remain uncertain. No autofill begins in this stage.
 
 The current allowlist is only `GET_STATE`, popup-only `CAPTURE_TARGET` and revision-bound `FORGET_CHECKPOINT`. Every message has a version, request ID and session/revision binding (null for discovery). Runtime sender, input and response validation is mandatory. There is no generic fetch, script execution, credential access or submission command.
 
@@ -100,3 +102,11 @@ Firefox currently declares `required: ["none"]` because this shell does not tran
 The latest `web-ext` development launcher currently brings an upstream `node-forge` advisory. See the handoff for the exact audit and release limitation; shipped runtime dependencies audited clean. Do not apply npm's suggested downgrade to obsolete tooling automatically.
 
 Stop after candidate profiles. The next implementation task is **03 — Documents**.
+
+## Read-only field inspection
+
+Invoke applyr on the application, then choose **Inspect fields** in the application-page section. If several forms are plausible, choose the displayed form. Review labels, fieldset context, required/native validation, constraints, choices and existing-value presence. Existing values are represented only by document-salted fingerprints; raw answers, credentials and filenames are not displayed or persisted by inspection.
+
+Select an embedded application in **Inspection context** after granting its displayed origin using the frame-access action. Inaccessible frames, opaque/closed custom roots, canvas, rich text, locked controls and unverified widgets stay manual. Open roots are inspected within fixed bounds. Declarations, sensitive questions and missing semantics are flagged for review; submit/Next/finalization controls are excluded.
+
+Snapshots live in memory, are point-in-time observations and clear when the checkpoint changes. Reinspect after editing, rerendering, navigating or completing a manual gate. At least two observation intervals and a quiet final comparison are required, with at most four scans, a 1.2-second scan-start deadline and a 100-record mutation stop; loops produce an unstable snapshot. No observer runs indefinitely. No mapping, writes, uploads, model calls or submission are available in this stage. Prompt 06 is next.

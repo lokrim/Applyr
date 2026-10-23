@@ -29,6 +29,11 @@ export function createCoordinator(dependencies: CoordinatorDependencies) {
       const store = await dependencies.store();
       let checkpoint: SessionCheckpoint | null = null;
       switch (message.type) {
+        case 'INSPECT_FORM': {
+          if (!dependencies.access) return fail('ACCESS_UNAVAILABLE');
+          const result = await dependencies.access.inspect(message, message.frameOrigin, message.frameIdentity, message.selection);
+          return { schemaVersion: 1, requestId: message.requestId, ok: true, ...result };
+        }
         case 'GET_STATE': {
           // A tab event may invalidate state while a view is reading it. Retry
           // the read instead of showing a stale-mutation error for a passive read.

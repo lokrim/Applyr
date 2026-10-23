@@ -1,0 +1,45 @@
+{
+  "name": "applyr",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env node_modules/wxt/bin/wxt.mjs -b chrome --mv3",
+    "dev:brave": "node --env-file-if-exists=.env scripts/dev-brave.mjs",
+    "dev:firefox": "node --env-file-if-exists=.env node_modules/wxt/bin/wxt.mjs -b firefox --mv3",
+    "build": "wxt build -b chrome --mv3",
+    "build:firefox": "wxt build -b firefox --mv3",
+    "typecheck": "wxt prepare && tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "test:shell": "npm run build && playwright test",
+    "check:manifests": "node scripts/check-manifests.mjs",
+    "check": "npm run typecheck && npm run lint && npm test && npm run build && npm run build:firefox && npm run check:manifests",
+    "postinstall": "wxt prepare"
+  },
+  "dependencies": {
+    "idb": "8.0.4",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.1",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@wxt-dev/module-react": "1.2.2",
+    "eslint": "10.13.0",
+    "fake-indexeddb": "6.2.6",
+    "globals": "17.13.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.0",
+    "vitest": "5.0.5",
+    "web-ext": "10.8.0",
+    "wxt": "0.21.4"
+  }
+}

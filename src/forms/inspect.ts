@@ -122,8 +122,8 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
         if (!['text', 'email', 'tel', 'url', 'date', 'month', 'number', 'select', 'textarea', 'radio', 'checkbox', 'file'].includes(type)) { add('custom_control', named.label || 'Unsupported native control'); continue; }
         if (fields.length >= 100) { limited = true; break; }
         const control = e as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
-        let category: FormSnapshot['fields'][number]['category'] = type === 'file' ? 'file' : /consent|agree|certif|attest|acknowledge|privacy|terms|declar|i confirm|i accept|authorize|personal data/i.test(semantics) ? 'declaration'
-          : /gender|race|ethnic|disabil|veteran|sexual|religio|citizen|visa|sponsor|work authoriz|eligib|salary|compensation|criminal|birth/i.test(semantics) ? 'sensitive'
+        let category: FormSnapshot['fields'][number]['category'] = type === 'file' ? 'file' : /consent|agree|certif|attest|acknowledge|privacy|terms|declar|i confirm|i accept|\bauthori[sz]e\b|personal data/i.test(semantics) ? 'declaration'
+          : /gender|race|ethnic|disabil|veteran|sexual|religio|citizen|visa|sponsor|work authori[sz]|authori[sz](?:ed|ation).*work|eligib|salary|compensation|criminal|birth/i.test(semantics) ? 'sensitive'
             : ['select', 'radio'].includes(type) ? 'choice' : type === 'checkbox' ? 'preference' : type === 'textarea' ? 'long_answer' : 'short_answer';
         if (!named.label || named.labelSource === 'placeholder') category = 'missing_semantics';
         const filePurpose = type !== 'file' ? null : /resume|résumé|\bcv\b/i.test(semantics) ? 'resume' : /cover/i.test(semantics) ? 'cover_letter' : /portfolio/i.test(semantics) ? 'portfolio' : /transcript/i.test(semantics) ? 'transcript' : 'unknown';
@@ -136,7 +136,7 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
         fields.push({ id: identify(e), ...named, context, type: type as FormSnapshot['fields'][number]['type'], autocomplete: clean(e.getAttribute('autocomplete')), required: control.required || e.getAttribute('aria-required') === 'true', category, filePurpose,
           executable: !['declaration', 'sensitive', 'missing_semantics'].includes(category) && (type !== 'file' || filePurpose === 'resume'),
           constraints: { min: clean(e.getAttribute('min')), max: clean(e.getAttribute('max')), step: clean(e.getAttribute('step')), minLength: clean(e.getAttribute('minlength')), maxLength: clean(e.getAttribute('maxlength')), pattern: clean(e.getAttribute('pattern')), accept: clean(e.getAttribute('accept')), multiple: e.hasAttribute('multiple') }, options,
-          current: { fingerprint: await opaque(value), present: ['checkbox', 'radio'].includes(type) ? (control as HTMLInputElement).checked : value.length > 0 },
+          current: { fingerprint: await opaque(value), present: ['checkbox', 'radio'].includes(type) ? (control as HTMLInputElement).checked : value.length > 0 || (control instanceof HTMLSelectElement && Array.from(control.selectedOptions).some((o) => !!o.label.trim() && !/^(?:choose(?: an option)?|select(?: an option)?|please (?:choose|select)(?: an option)?|--+|\s*)[.\s-]*$/i.test(o.label))) },
           // Do not call checkValidity/reportValidity (they dispatch events), or read
           // validationMessage/error text: those can echo credentials or answers.
           validation: { valid: control.willValidate ? control.validity.valid : null, flags, ariaInvalid: e.getAttribute('aria-invalid') === 'true', errorPresent: !!refs(e, 'aria-errormessage') },

@@ -67,4 +67,14 @@ footer p { font-size: 11px; margin: 4px 0; }
 .target-workspace form > button { margin-top: 10px; }
 .target-workspace p, .target-workspace button { overflow-wrap: anywhere; }
 .frame-access { border-top: 1px solid #dce2d8; padding: 10px 0; }
+.dry-run { border: 1px solid #b9cbb4; background: #f8fbf5; border-radius: 8px; padding: 12px; margin: 16px 0; overflow-wrap: anywhere; }
+.dry-run h3 { margin-top: 0; font-size: 15px; }
+.mapping-items { padding-left: 20px; }
+.mapping-items > li { border-top: 1px solid #dce2d8; padding: 14px 0; font-size: 12px; }
+.dry-run summary { cursor: pointer; font-size: 12px; font-weight: 600; }
+.dry-run select { max-width: 100%; border: 1px solid #9daea1; border-radius: 5px; background: #fff; color: #20352d; padding: 8px; }
+.dry-run input[type=checkbox] { display: inline-block; width: auto; margin-right: 8px; }
+.dry-run .check-label { display: flex; align-items: flex-start; gap: 6px; }
+.dry-run pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; font-size: 12px; }
+.dry-run select:focus-visible, .dry-run summary:focus-visible { outline: 2px solid #b16421; outline-offset: 3px; }
 @media (max-width: 360px) { .shell { padding: 20px 14px; } .section-heading { flex-wrap: wrap; } }

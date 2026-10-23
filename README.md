@@ -1,6 +1,6 @@
 # applyr
 
-Local-first assistance for job applications. **Prompts 01–02 implement the extension shell and candidate profiles.** Profile setup, safe Markdown import/export, explicit saved defaults and frozen session profiles work locally without AI. Resumes, page inspection, autofill and provider integrations are not implemented. The original specification and sequential prompts are in [planning/](planning/README.md); the current handoff is [IMPLEMENTATION_STATUS.md](planning/IMPLEMENTATION_STATUS.md).
+Local-first assistance for job applications. **Prompts 01–03 implement the extension shell, candidate profiles and local resume documents.** Profile setup, safe Markdown import/export, explicit reusable defaults, versioned session inputs and PDF recovery work locally without AI. The owned Chromium upload fixture proves byte preservation only; page access, real-page autofill and provider integrations are not implemented.
 
 ## Local setup
 

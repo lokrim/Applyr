@@ -55,4 +55,10 @@ footer p { font-size: 11px; margin: 4px 0; }
 .validation-preview li { margin: 10px 0; overflow-wrap: anywhere; }
 .snapshot-summary, .examples, .proposal, .delete-profile { border-top: 1px solid #dce2d8; padding-top: 8px; margin-top: 14px; }
 .snapshot-summary p { overflow-wrap: anywhere; }
+.document-workspace h3 { font-size: 13px; margin-top: 20px; }
+.document-workspace label { display: block; font-size: 12px; margin: 14px 0; }
+.document-workspace input[type=file] { display: block; margin-top: 8px; max-width: 100%; }
+.document-workspace .reuse-choice { display: flex; gap: 8px; align-items: flex-start; }
+.document-workspace input:focus-visible { outline: 2px solid #b16421; outline-offset: 3px; }
+.document-workspace [data-testid=pending-resume], .delete-document { border: 1px solid #b9cbb4; padding: 12px; margin-top: 12px; border-radius: 8px; }
 @media (max-width: 360px) { .shell { padding: 20px 14px; } .section-heading { flex-wrap: wrap; } }

@@ -5,6 +5,7 @@ import type { SessionCheckpoint } from '../domain/session';
 import { openOptions, openSessionSurface, openSessionTab, surfaceCapability } from '../browser/surfaces';
 import { readCheckpoint, sendIntent } from '../runtime/client';
 import { ProfileSummary, ProfileWorkspace } from './ProfileWorkspace';
+import { DocumentSummary, DocumentWorkspace } from './DocumentWorkspace';
 
 export type Surface = 'popup' | 'session' | 'options';
 type SourceTab = { id: number; windowId: number };
@@ -89,7 +90,7 @@ export function App({ surface }: { surface: Surface }) {
           <h2 id="readiness-heading">Ready when you are</h2>
           <ul className="readiness">
             <li><span>Candidate profile</span><ProfileSummary /></li>
-            <li><span>Resume</span><strong>Not added</strong></li>
+            <li><span>Resume</span><DocumentSummary /></li>
             <li><span>AI assistance</span><strong>Not configured</strong></li>
             <li><span>Session surface</span><strong>{capability}</strong></li>
           </ul>
@@ -112,13 +113,14 @@ export function App({ surface }: { surface: Surface }) {
           {surface !== 'options' && <button className="text-button" onClick={() => void perform(openOptions)}>Settings & privacy</button>}
         </div>
 
+        {surface !== 'popup' && <DocumentWorkspace key={`documents-${checkpoint?.id ?? 'no-session'}`} surface={surface} sessionId={checkpoint?.id ?? null} onMutation={async () => { setCheckpoint(await readCheckpoint()); }} />}
         {surface !== 'popup' && <ProfileWorkspace key={checkpoint?.id ?? 'no-session'} surface={surface} sessionId={checkpoint?.id ?? null} onFreeze={async () => { setCheckpoint(await readCheckpoint()); }} />}
 
         {surface === 'options' && <section className="card" aria-labelledby="storage-heading">
           <h2 id="storage-heading">Local recovery & permissions</h2>
           <p>{branding.copy.privacy}</p>
           <p>No optional site-origin or notification permission has been requested by this shell. Optional eligibility is declared for future explicit user requests.</p>
-          <p>Saved profiles stay in extension-origin IndexedDB until explicitly deleted. Session-only profile copies expire after seven days. Documents and providers are not configured yet.</p>
+          <p>Saved profiles and reusable resumes stay in extension-origin IndexedDB until explicitly deleted or replaced. Session recovery copies expire after seven days; unsaved documents are also removed on cancellation or finish. Providers are not configured yet.</p>
           <button className="secondary" disabled={busy || !checkpoint} onClick={() => void perform(async () => {
             if (checkpoint) setCheckpoint(await sendIntent({ type: 'FORGET_CHECKPOINT', sessionId: checkpoint.id, revision: checkpoint.revision }));
             setNotice('Setup checkpoint removed from this browser.');

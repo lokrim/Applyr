@@ -41,7 +41,7 @@ test('real extension profile setup, import/export, explicit defaults, frozen rep
   }
   async function validate(p: Page) { await p.getByRole('button', { name: 'Validate profile', exact: true }).click(); await expect(p.getByRole('heading', { name: 'Validation passed — review supplied assertions' })).toBeVisible(); }
   async function download(p: Page) { const event = p.waitForEvent('download'); await p.getByRole('button', { name: 'Download Markdown', exact: true }).click(); const file = await event; return await readFile((await file.path())!, 'utf8'); }
-  async function upload(p: Page, text: string) { await p.locator('input[type=file]').setInputFiles({ name: 'fictional-test.md', mimeType: 'text/markdown', buffer: Buffer.from(text) }); await expect(p.getByRole('heading', { name: 'Validation passed — review supplied assertions' })).toBeVisible(); }
+  async function upload(p: Page, text: string) { await p.locator('.profile-workspace input[type=file]').setInputFiles({ name: 'fictional-test.md', mimeType: 'text/markdown', buffer: Buffer.from(text) }); await expect(p.getByRole('heading', { name: 'Validation passed — review supplied assertions' })).toBeVisible(); }
   try {
     // Capture a genuine setup checkpoint through the popup; candidate details remain fictional.
     await worker.evaluate(async () => chrome.tabs.create({ url: 'about:blank', active: true }));
@@ -111,9 +111,9 @@ test('real extension profile setup, import/export, explicit defaults, frozen rep
     await options.getByRole('button', { name: 'Reload profile state' }).click(); await options.getByRole('button', { name: 'Edit saved default' }).click(); await expect(options.getByTestId('profile-preview')).not.toContainText('identity:');
 
     // Unknown-key repair is deliberate and errors do not contain field values.
-    await options.locator('input[type=file]').setInputFiles({ name: 'unknown.md', mimeType: 'text/markdown', buffer: Buffer.from('---\nprofile_version: 1\nidentity: {nickname: Fictional}\n---\n') });
+    await options.locator('.profile-workspace input[type=file]').setInputFiles({ name: 'unknown.md', mimeType: 'text/markdown', buffer: Buffer.from('---\nprofile_version: 1\nidentity: {nickname: Fictional}\n---\n') });
     await expect(options.getByRole('alert')).toContainText('Repair 1 validation issue'); await options.getByRole('button', { name: 'Remove this unknown key' }).click(); await expect(options.getByRole('heading', { name: 'Validation passed — review supplied assertions' })).toBeVisible();
-    await options.locator('input[type=file]').setInputFiles({ name: 'secret.md', mimeType: 'text/markdown', buffer: Buffer.from('---\nprofile_version: 1\napi_key: secret-canary\n---\n') });
+    await options.locator('.profile-workspace input[type=file]').setInputFiles({ name: 'secret.md', mimeType: 'text/markdown', buffer: Buffer.from('---\nprofile_version: 1\napi_key: secret-canary\n---\n') });
     await expect(options.locator('.validation-preview')).toContainText('FORBIDDEN_KEY'); await expect(options.locator('.validation-preview')).not.toContainText('secret-canary'); await expect(options.getByRole('button', { name: 'Remove this unknown key' })).toHaveCount(0);
     await expect(options.getByRole('button', { name: 'Save as default', exact: true })).toHaveCount(0);
     await options.getByRole('button', { name: 'Delete saved profile', exact: true }).click(); await options.getByRole('button', { name: 'Confirm delete profile and recovery copies' }).click(); await expect(options.getByTestId('saved-profile-state')).toHaveText('No saved default profile.');

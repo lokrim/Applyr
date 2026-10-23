@@ -52,10 +52,14 @@ export function ProfileWorkspace({ surface, sessionId, onFreeze }: { surface: 'o
 
   useEffect(() => {
     let alive = true;
-    const generation = importGeneration.current;
-    void profileStore().then((store) => store.read()).then((state) => { if (alive && generation === importGeneration.current) { setSaved(state.saved); setSnapshot(state.snapshot); } if (alive) setReady(true); })
-      .catch(() => { if (alive) setError('Local profile storage is unavailable. Reload to try again.'); });
-    return () => { alive = false; };
+    const refresh = () => {
+      const generation = importGeneration.current;
+      void profileStore().then((store) => store.read()).then((state) => { if (alive && generation === importGeneration.current) { setSaved(state.saved); setSnapshot(state.snapshot); } if (alive) setReady(true); })
+        .catch(() => { if (alive) setError('Local profile storage is unavailable. Reload to try again.'); });
+    };
+    const stop = onProfileChange(refresh);
+    refresh();
+    return () => { alive = false; stop(); };
   }, []);
 
   useEffect(() => onProfileDeletion(() => {

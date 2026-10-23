@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>applyr owned upload proof</title>
+<style>body { font: 16px system-ui; max-width: 760px; margin: 40px auto; padding: 20px; } section { border: 1px solid #aaa; padding: 20px; margin-top: 20px; } button,select { margin: 12px; padding: 8px; } output { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }</style>
+<h1>Owned native upload feasibility fixture</h1>
+<p>Fictional PDFs only. This fixture is test-only and never bundled with the extension. Native input selection is separate from receiver acceptance.</p>
+<section><label>Native resume input <input id="native" name="resume" type="file" accept=".pdf,application/pdf"></label>
+<output id="selection">No file selected</output>
+<label>Receiver behavior <select id="behavior"><option value="accept">Accept</option><option value="reject">Reject</option></select></label>
+<button id="send" type="button">Send to owned local receiver</button><output id="remote">Not sent to receiver</output></section>
+<section><label>Custom trusted-event-only widget <input id="custom" type="file"></label><output id="custom-state">No custom attachment</output></section>
+<script>
+  const native = document.querySelector('#native');
+  const digest = async (buffer) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', buffer)), b => b.toString(16).padStart(2, '0')).join('');
+  native.addEventListener('change', async () => {
+    const file = native.files[0];
+    document.querySelector('#selection').textContent = file ? `Input selected: ${file.name}; ${file.size} bytes; ${await digest(await file.arrayBuffer())}` : 'No file selected';
+    document.querySelector('#remote').textContent = 'Not sent to receiver';
+  });
+  document.querySelector('#custom').addEventListener('change', event => {
+    document.querySelector('#custom-state').textContent = event.isTrusted ? 'Trusted selection observed; acceptance still unverified' : 'Manual upload required: this custom widget ignores synthetic events. Select the file on the page and review its upload result.';
+  });
+  document.querySelector('#send').addEventListener('click', async () => {
+    const data = new FormData();
+    if (!native.files[0]) return;
+    data.append('resume', native.files[0]);
+    const response = await fetch(`/receive?behavior=${document.querySelector('#behavior').value}`, { method: 'POST', body: data });
+    document.querySelector('#remote').textContent = response.ok ? 'Owned receiver accepted bytes' : 'Owned receiver rejected file; manual review required';
+  });
+  // Explicit JSON-safe test bridge. This is automation-driver transport, NOT an
+  // extension runtime/content protocol. Prompt 07 must authorize/bind/cancel it.
+  window.reconstructForProof = async (payload, selector = '#native') => {
+    const input = document.querySelector(selector);
+    if (!(input instanceof HTMLInputElement) || input.type !== 'file') return { status: 'manual', reason: 'No verified native file input' };
+    const parts = payload.chunks.map(chunk => Uint8Array.from(atob(chunk), c => c.charCodeAt(0)));
+    const file = new File(parts, payload.filename, { type: payload.mime, lastModified: payload.lastModified });
+    if (file.size > 10 * 1024 * 1024 || file.size !== payload.size || await digest(await file.arrayBuffer()) !== payload.digest) return { status: 'manual', reason: 'Byte integrity failed; reselect manually' };
+    try {
+      const transfer = new DataTransfer(); transfer.items.add(file); input.files = transfer.files;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return { status: 'input_selected', fileList: input.files instanceof FileList, count: input.files.length, bytes: Array.from(new Uint8Array(await input.files[0].arrayBuffer())), digest: await digest(await input.files[0].arrayBuffer()) };
+    } catch { return { status: 'manual', reason: 'Native assignment failed; choose the file manually' }; }
+  };
+</script></html>

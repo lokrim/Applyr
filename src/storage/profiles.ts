@@ -5,6 +5,7 @@ import { CheckpointSchema } from '../runtime/schemas';
 import { RECOVERY_TTL_MS } from '../domain/session';
 import { validateProfileDocument } from '../profile/markdown';
 import type { ProfileDocument } from '../profile/schema';
+import { LOCAL_STORES, purgeDocumentRecords } from './documents';
 
 const documentSchema = z.custom<ProfileDocument>((value) => {
   if (!value || typeof value !== 'object') return false;
@@ -30,12 +31,13 @@ export class ProfileStore {
   constructor(private readonly database: IDBPDatabase<ApplyrDatabase>, private readonly now = Date.now, private readonly uuid = () => crypto.randomUUID()) {}
 
   async read() {
-    const tx = this.database.transaction(['profiles', 'checkpoints'], 'readwrite');
+    const tx = this.database.transaction(LOCAL_STORES, 'readwrite');
     const rawDefault = await tx.objectStore('profiles').get('default');
     const rawSnapshot = await tx.objectStore('profiles').get('snapshot');
     const saved = SavedSchema.safeParse(rawDefault);
     const snapshot = SnapshotSchema.safeParse(rawSnapshot);
     const checkpoint = CheckpointSchema.safeParse(await tx.objectStore('checkpoints').get('current'));
+    await purgeDocumentRecords(tx, checkpoint.success && checkpoint.data.expiresAt > this.now() ? checkpoint.data.id : null, this.now());
     const selected = snapshot.success && checkpoint.success && checkpoint.data.id === snapshot.data.sessionId && checkpoint.data.expiresAt > this.now() && snapshot.data.expiresAt > this.now() ? snapshot.data : null;
     if (rawDefault !== undefined && !saved.success) await tx.objectStore('profiles').delete('default');
     if (rawSnapshot !== undefined && !selected) await tx.objectStore('profiles').delete('snapshot');

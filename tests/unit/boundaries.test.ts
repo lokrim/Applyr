@@ -31,14 +31,15 @@ describe('runtime trust boundaries', () => {
     ]) expect(trustedPage(sender, 'test', [page])).toBeNull();
   });
 
-  it('persists only the HTTPS origin, never credentials, path, query, fragment or title', () => {
+  it('rejects credential-bearing targets and preserves safe HTTPS job metadata', () => {
     const target = targetReference({ id: 7, windowId: 1, url: 'https://user:secret@example.org/private?token=secret#otp' });
-    expect(target).toEqual({ tabId: 7, windowId: 1, origin: 'https://example.org', availability: 'https' });
+    expect(target).toMatchObject({ tabId: 7, windowId: 1, origin: null, availability: 'restricted', url: null });
     expect(targetReference({ id: 7, windowId: 1, url: 'chrome://settings' }).availability).toBe('restricted');
     expect(targetReference({ id: 7, windowId: 1 }).availability).toBe('unavailable');
     expect(() => targetReference({ windowId: 1 })).toThrow();
     expect(TargetSchema.safeParse({ ...target, origin: 'https://example.org/path' }).success).toBe(false);
-    expect(TargetSchema.safeParse({ ...target, origin: null }).success).toBe(false);
+    expect(TargetSchema.safeParse({ ...target, origin: null, availability: 'https' }).success).toBe(false);
+    expect(TargetSchema.safeParse({ ...target, url: 'not-a-url' }).success).toBe(false);
   });
 
   it('creates a truthful, expiring setup checkpoint with no candidate or submission claim', () => {

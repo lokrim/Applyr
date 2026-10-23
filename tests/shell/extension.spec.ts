@@ -45,6 +45,7 @@ test('built extension captures a source, reopens its UI and persists across brow
     const popup = await packagedPage(running.worker, `${running.base}/popup.html`);
     await expect(popup.getByRole('heading', { name: 'Saved setup checkpoint' })).toBeVisible();
     await expect(popup.getByTestId('target-tab')).toHaveText(`Source tab #${source.id}`);
+    await expect(popup.getByTestId('page-classification')).toHaveText('restricted');
     await expect(popup.getByText('Not configured', { exact: true })).toBeVisible();
     const checkpointId = await popup.getByTestId('checkpoint-id').innerText();
 
@@ -76,6 +77,11 @@ test('built extension captures a source, reopens its UI and persists across brow
     const restored = await packagedPage(running.worker, `${running.base}/session.html`);
     await expect(restored.getByTestId('checkpoint-id')).toHaveText(checkpointId);
     await expect(restored.getByText('Tab IDs must be rebound after a browser restart.', { exact: false })).toBeVisible();
+    // Orderly Chromium shutdown can close the bound tab before startup fires.
+    // Either event must leave durable attention and prevent automatic probing.
+    await expect(restored.getByTestId('page-status')).toHaveText('Needs attention');
+    await expect(restored.getByTestId('page-guidance')).toContainText(/browser restarted|tab closed/);
+    await expect(restored.getByRole('button', { name: 'Inspect bound page', exact: true })).toBeDisabled();
     await restored.getByRole('button', { name: 'Settings & privacy' }).click();
     // openOptionsPage may reuse/navigate an existing tab instead of emitting a new-page event.
     await expect.poll(() => context!.pages().some((page) => page.url() === `${running.base}/options.html`)).toBe(true);

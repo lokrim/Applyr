@@ -3,16 +3,33 @@ export interface TargetReference {
   tabId: number;
   windowId: number;
   origin: string | null;
-  availability: 'https' | 'restricted' | 'unavailable';
+  availability: 'https' | 'loopback' | 'restricted' | 'unavailable';
+  url?: string | null;
+  title?: string | null;
+  role?: string | null;
+  company?: string | null;
+  identity?: string;
+}
+
+export type PageClassification = 'application' | 'listing' | 'login_challenge' | 'irrelevant' | 'restricted' | 'uncertain';
+export interface FrameCandidate { url: string; origin: string; identity: string }
+export interface PageAccess {
+  status: 'unprobed' | 'ready' | 'needs_attention';
+  classification: PageClassification;
+  reason: 'unprobed' | 'application' | 'listing' | 'login_challenge' | 'irrelevant' | 'uncertain' | 'restricted' | 'permission' | 'frame_permission' | 'frame_unavailable' | 'closed' | 'navigation' | 'reload' | 'restart';
+  frames: FrameCandidate[];
+  documentId?: string;
+  inspectedAt?: number;
 }
 
 export interface SessionCheckpoint {
   schemaVersion: 1;
   id: string;
   revision: number;
-  lifecycle: 'QUEUED';
+  lifecycle: 'QUEUED' | 'NEEDS_ATTENTION';
   phase: 'SETUP';
   target: TargetReference;
+  access?: PageAccess;
   createdAt: number;
   updatedAt: number;
   expiresAt: number;

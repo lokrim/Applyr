@@ -6,6 +6,7 @@ import { openOptions, openSessionSurface, openSessionTab, surfaceCapability } fr
 import { readCheckpoint, sendIntent } from '../runtime/client';
 import { ProfileSummary, ProfileWorkspace } from './ProfileWorkspace';
 import { DocumentSummary, DocumentWorkspace } from './DocumentWorkspace';
+import { TargetWorkspace } from './TargetWorkspace';
 
 export type Surface = 'popup' | 'session' | 'options';
 type SourceTab = { id: number; windowId: number };
@@ -40,11 +41,13 @@ export function App({ surface }: { surface: Surface }) {
     }
     void initialize();
     const refreshOnFocus = () => {
-      void readCheckpoint().then((saved) => { if (alive) setCheckpoint(saved); })
+      void readCheckpoint().then((saved) => { if (alive) { setCheckpoint(saved); setError(''); } })
         .catch((reason: unknown) => { if (alive) setError(message(reason)); });
     };
     window.addEventListener('focus', refreshOnFocus);
-    return () => { alive = false; window.removeEventListener('focus', refreshOnFocus); };
+    const channel = new BroadcastChannel('applyr-target');
+    channel.onmessage = refreshOnFocus;
+    return () => { alive = false; window.removeEventListener('focus', refreshOnFocus); channel.close(); };
   }, [surface]);
 
   async function perform(action: () => Promise<unknown>) {
@@ -70,13 +73,11 @@ export function App({ surface }: { surface: Surface }) {
 
       {!loading && <>
         <section className="card" aria-labelledby="checkpoint-heading">
-          <div className="section-heading"><h2 id="checkpoint-heading">{checkpoint ? 'Saved setup checkpoint' : 'No saved checkpoint'}</h2><span className="pill">{checkpoint ? 'Setup needed' : 'Empty'}</span></div>
+          <div className="section-heading"><h2 id="checkpoint-heading">{checkpoint ? 'Saved setup checkpoint' : 'No saved checkpoint'}</h2><span className="pill">{checkpoint?.lifecycle === 'NEEDS_ATTENTION' ? 'Needs attention' : checkpoint ? 'Setup needed' : 'Empty'}</span></div>
           {checkpoint ? <>
             <p className="target" data-testid="target-origin">{checkpoint.target.origin ?? (checkpoint.target.availability === 'restricted' ? 'Browser or unsupported page' : 'Site address unavailable')}</p>
             <p data-testid="target-tab">Source tab #{checkpoint.target.tabId}</p>
-            <p className="muted">{checkpoint.target.availability === 'https'
-              ? 'Only the HTTPS origin is saved. Page inspection has not started.'
-              : 'Open applyr from an HTTPS application page when page access is implemented.'}</p>
+            <p className="muted">{checkpoint.access?.status === 'needs_attention' ? 'Needs attention — page access must be resolved.' : 'Session stays bound to this source when you switch tabs.'}</p>
             <dl className="details">
               <div><dt>Checkpoint</dt><dd data-testid="checkpoint-id">{checkpoint.id}</dd></div>
               <div><dt>Saved</dt><dd>{new Date(checkpoint.updatedAt).toLocaleString()}</dd></div>
@@ -85,6 +86,8 @@ export function App({ surface }: { surface: Surface }) {
             <p className="muted">A saved tab reference is not permission to act. Tab IDs must be rebound after a browser restart.</p>
           </> : <p>Open the toolbar popup on your intended application tab to save a source reference. No profile has been added.</p>}
         </section>
+
+        <TargetWorkspace key={`target-${checkpoint?.id ?? 'empty'}`} checkpoint={checkpoint} onChange={setCheckpoint} />
 
         <section className="card" aria-labelledby="readiness-heading">
           <h2 id="readiness-heading">Ready when you are</h2>
@@ -103,7 +106,7 @@ export function App({ surface }: { surface: Surface }) {
               // Invoke immediately on the click; the source is already captured and persisted.
               if (checkpoint) void perform(async () => setNotice(await openSessionSurface(checkpoint.target.windowId)));
             }}>Open session</button>
-            {sourceTab && <button className="secondary" disabled={busy || sourceTab.id === checkpoint?.target.tabId} onClick={() => void perform(async () => {
+            {sourceTab && <button className="secondary" disabled={busy || (sourceTab.id === checkpoint?.target.tabId && !['navigation', 'restart', 'closed'].includes(checkpoint?.access?.reason ?? ''))} onClick={() => void perform(async () => {
               setCheckpoint(await sendIntent({ type: 'CAPTURE_TARGET', tabId: sourceTab.id, sessionId: checkpoint?.id ?? null, revision: checkpoint?.revision ?? null }));
               setNotice('Source tab captured. Open the session when ready.');
             })}>Use this tab</button>}
@@ -119,7 +122,7 @@ export function App({ surface }: { surface: Surface }) {
         {surface === 'options' && <section className="card" aria-labelledby="storage-heading">
           <h2 id="storage-heading">Local recovery & permissions</h2>
           <p>{branding.copy.privacy}</p>
-          <p>No optional site-origin or notification permission has been requested by this shell. Optional eligibility is declared for future explicit user requests.</p>
+          <p>Site access is requested per displayed origin through an explicit click. Browser controls can revoke it. Notifications and AI transmission remain off.</p>
           <p>Saved profiles and reusable resumes stay in extension-origin IndexedDB until explicitly deleted or replaced. Session recovery copies expire after seven days; unsaved documents are also removed on cancellation or finish. Providers are not configured yet.</p>
           <button className="secondary" disabled={busy || !checkpoint} onClick={() => void perform(async () => {
             if (checkpoint) setCheckpoint(await sendIntent({ type: 'FORGET_CHECKPOINT', sessionId: checkpoint.id, revision: checkpoint.revision }));

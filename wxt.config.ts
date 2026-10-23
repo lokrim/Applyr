@@ -26,12 +26,12 @@ export default defineConfig({
       ...(process.env.FIREFOX_BINARY ? { firefox: process.env.FIREFOX_BINARY } : {}),
     },
   },
-  manifest: ({ browser }) => ({
+  manifest: ({ browser, mode }) => ({
     name: branding.name,
     description: branding.description,
     permissions: ['activeTab', 'scripting', 'storage', ...(browser === 'firefox' ? [] : ['sidePanel'])],
     optional_permissions: ['notifications'],
-    optional_host_permissions: ['https://*/*'],
+    optional_host_permissions: ['https://*/*', ...(mode === 'development' ? ['http://localhost/*', 'http://127.0.0.1/*', 'http://[::1]/*'] : [])],
     content_security_policy: { extension_pages: "script-src 'self'; object-src 'none'; connect-src 'none'" },
     ...(browser === 'firefox'
       ? {

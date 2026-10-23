@@ -7,7 +7,7 @@ export const branding = {
   copy: {
     setup: 'Set up your first candidate profile',
     foundation: 'Create or import a candidate profile locally, review it, then choose a saved default or a whole profile for this session.',
-    privacy: 'This checkpoint contains only a source-tab reference and setup state. It expires after seven days. Local storage is not an encrypted vault.',
+    privacy: 'This checkpoint keeps the bound tab, sanitized application metadata and local setup state for seven days. Local storage is not an encrypted vault.',
     manual: 'You review every application and submit on the employer’s page yourself.',
   },
 } as const;

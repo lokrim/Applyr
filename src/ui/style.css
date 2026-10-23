@@ -61,4 +61,10 @@ footer p { font-size: 11px; margin: 4px 0; }
 .document-workspace .reuse-choice { display: flex; gap: 8px; align-items: flex-start; }
 .document-workspace input:focus-visible { outline: 2px solid #b16421; outline-offset: 3px; }
 .document-workspace [data-testid=pending-resume], .delete-document { border: 1px solid #b9cbb4; padding: 12px; margin-top: 12px; border-radius: 8px; }
+.target-workspace label { display: block; font-size: 12px; margin: 12px 0 5px; }
+.target-workspace input { display: block; width: 100%; min-width: 0; border: 1px solid #9daea1; border-radius: 5px; padding: 8px; color: #20352d; font: inherit; font-size: 12px; }
+.target-workspace input:focus-visible { outline: 2px solid #b16421; outline-offset: 3px; }
+.target-workspace form > button { margin-top: 10px; }
+.target-workspace p, .target-workspace button { overflow-wrap: anywhere; }
+.frame-access { border-top: 1px solid #dce2d8; padding: 10px 0; }
 @media (max-width: 360px) { .shell { padding: 20px 14px; } .section-heading { flex-wrap: wrap; } }

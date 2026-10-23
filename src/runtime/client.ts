@@ -9,6 +9,8 @@ const errors = {
   STALE_CHECKPOINT: 'The checkpoint changed in another window or expired. Refresh before trying again.',
   TAB_UNAVAILABLE: 'The source tab is no longer available. Open the popup from the intended tab.',
   STORAGE_UNAVAILABLE: 'Local recovery storage is unavailable. Check browser storage space and reload.',
+  INVALID_URL: 'Use a valid HTTPS application URL without credentials. Browser pages are unsupported.',
+  ACCESS_UNAVAILABLE: 'This page or embedded application cannot be inspected. Invoke applyr on the application itself.',
 } as const;
 
 export async function sendIntent(intent: Intent) {

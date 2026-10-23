@@ -6,7 +6,7 @@ export const branding = {
   pages: { popup: '/popup.html', session: '/session.html', options: '/options.html' },
   copy: {
     setup: 'Set up your first candidate profile',
-    foundation: 'The extension foundation is ready. Profile setup arrives in the next implementation step.',
+    foundation: 'Create or import a candidate profile locally, review it, then choose a saved default or a whole profile for this session.',
     privacy: 'This checkpoint contains only a source-tab reference and setup state. It expires after seven days. Local storage is not an encrypted vault.',
     manual: 'You review every application and submit on the employer’s page yourself.',
   },

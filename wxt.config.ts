@@ -1,10 +1,16 @@
 import { defineConfig } from 'wxt';
+import { fileURLToPath } from 'node:url';
 import { branding } from './src/branding';
 
 export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifestVersion: 3,
   imports: false,
+  vite: () => ({ resolve: { alias: {
+    // micromark's browser decoder needs document at module load. Use its official
+    // non-DOM export in every bundle, including Chromium's service worker.
+    'decode-named-character-reference': fileURLToPath(import.meta.resolve('decode-named-character-reference')),
+  } } }),
   hooks: {
     'build:manifestGenerated'(wxt, manifest) {
       manifest.action = { ...manifest.action, default_title: branding.name };

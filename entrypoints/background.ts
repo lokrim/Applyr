@@ -4,6 +4,7 @@ import { branding } from '../src/branding';
 import { createCoordinator } from '../src/runtime/coordinator';
 import { getDatabase } from '../src/storage/database';
 import { CheckpointStore } from '../src/storage/checkpoints';
+import { ProfileStore } from '../src/storage/profiles';
 import { targetReference } from '../src/browser/targets';
 import { restrictPreferenceAccess } from '../src/browser/surfaces';
 
@@ -30,6 +31,7 @@ export default defineBackground({
     const initialize = () => {
       void restrictPreferenceAccess().catch(() => { /* No preferences are stored in this shell. */ });
       void getDatabase().then((database) => new CheckpointStore(database).read()).catch(() => { /* UI reports storage failures. */ });
+      void getDatabase().then((database) => new ProfileStore(database).read()).catch(() => { /* UI reports bounded storage failures. */ });
     };
     browser.runtime.onStartup.addListener(initialize);
     browser.runtime.onInstalled.addListener(initialize);

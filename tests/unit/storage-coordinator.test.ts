@@ -25,9 +25,9 @@ describe('versioned IndexedDB checkpoints and coordinator', () => {
   });
   afterEach(async () => { database.close(); await deleteDB(name); });
 
-  it('migrates a new database to v1 and recovers after closing the connection', async () => {
-    expect(database.version).toBe(1);
-    expect(Array.from(database.objectStoreNames)).toEqual(['checkpoints']);
+  it('migrates a new database to v2 and recovers after closing the connection', async () => {
+    expect(database.version).toBe(2);
+    expect(Array.from(database.objectStoreNames)).toEqual(['checkpoints', 'profiles']);
     expect(await store.read()).toBeNull();
     await store.replace(record, empty);
     database.close();

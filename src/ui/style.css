@@ -84,3 +84,11 @@ footer p { font-size: 11px; margin: 4px 0; }
 .dry-run pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; font-size: 12px; }
 .dry-run select:focus-visible, .dry-run summary:focus-visible { outline: 2px solid #b16421; outline-offset: 3px; }
 @media (max-width: 360px) { .shell { padding: 20px 14px; } .section-heading { flex-wrap: wrap; } }
+
+.ai-review fieldset { min-width: 0; border: 1px solid #b9cbb4; border-radius: 8px; padding: 12px; margin: 14px 0; }
+.ai-review legend { font-size: 13px; font-weight: 650; padding: 0 5px; }
+.ai-review textarea { display: block; width: 100%; min-height: 110px; resize: vertical; border: 1px solid #9daea1; border-radius: 5px; background: #fff; color: #20352d; font: inherit; font-size: 13px; line-height: 1.5; padding: 9px; margin-top: 6px; }
+.ai-review textarea:focus-visible { outline: 2px solid #b16421; outline-offset: 3px; }
+.ai-review button { margin: 8px 8px 0 0; }
+.ai-review ul { padding-left: 20px; font-size: 12px; }
+.ai-review code { overflow-wrap: anywhere; }

@@ -16,12 +16,13 @@ import { AutofillService } from '../src/runtime/autofill';
 import { operateControl } from '../src/forms/apply';
 import { ContentOperationSchema } from '../src/forms/operations';
 import { ProviderStorage } from '../src/providers/storage';
+import { AiService, aiHandler } from '../src/ai/service';
 import { ProviderService, providerHandler } from '../src/providers/service';
 
 export default defineBackground({
   persistent: false,
   main() {
-    const providers = new ProviderService(new ProviderStorage(getDatabase, browser.storage.session), (pattern) => browser.permissions.contains({ origins: [pattern], ...(import.meta.env.BROWSER === 'firefox' ? { data_collection: ['authenticationInfo'] } : {}) }));
+    const providers = new ProviderService(new ProviderStorage(getDatabase, browser.storage.session), (pattern) => browser.permissions.contains({ origins: [pattern], ...(import.meta.env.BROWSER === 'firefox' ? { data_collection: ['authenticationInfo'] } : {}) }), undefined, () => import.meta.env.BROWSER === 'firefox' ? browser.permissions.contains({ origins: [], ...{ data_collection: ['websiteContent', 'personallyIdentifyingInfo', 'authenticationInfo'] } }) : Promise.resolve(true));
     const handleProvider = providerHandler(providers, browser.runtime.id, browser.runtime.getURL(branding.pages.options));
     const store = async () => new CheckpointStore(await getDatabase());
     const target = async (tabId: number) => capturedTarget(await browser.tabs.get(tabId), import.meta.env.DEV);
@@ -60,6 +61,8 @@ export default defineBackground({
         return found.length === 1 ? found[0]!.result : null;
       },
     });
+    const ai = new AiService(getDatabase, providers, autofill);
+    const handleAi = aiHandler(ai, browser.runtime.id, [browser.runtime.getURL(branding.pages.session), browser.runtime.getURL(branding.pages.options)]);
     const handle = createCoordinator({
       extensionId: browser.runtime.id,
       pages: {
@@ -74,7 +77,8 @@ export default defineBackground({
     // Callback bridge works with Chrome versions that do not support Promise listeners.
     browser.runtime.onMessage.addListener((message: unknown, sender, respond) => {
       const isProvider = typeof message === 'object' && message !== null && 'channel' in message && message.channel === 'providers';
-      void (isProvider ? handleProvider(message, sender) : handle(message, sender)).then(respond);
+      const isAi = typeof message === 'object' && message !== null && 'channel' in message && message.channel === 'ai';
+      void (isProvider ? handleProvider(message, sender) : isAi ? handleAi(message, sender) : handle(message, sender)).then(respond);
       return true;
     });
     const initialize = () => {
@@ -100,7 +104,7 @@ export default defineBackground({
         if (await browser.permissions.contains({ origins: [originPattern(checkpoint.target.origin, import.meta.env.DEV)] })) await access.probe({ sessionId: checkpoint.id, revision: checkpoint.revision });
       })());
     });
-    browser.permissions.onRemoved.addListener((permissions) => { providers.revokePermissions(); safely(access.revoked(permissions.origins ?? [])); });
+    browser.permissions.onRemoved.addListener((permissions) => { providers.revokePermissions(); ai.discard(); safely(access.revoked(permissions.origins ?? [])); });
     browser.runtime.onStartup.addListener(() => { initialize(); safely(access.event(null, 'restart')); });
     browser.runtime.onInstalled.addListener(initialize);
     initialize();

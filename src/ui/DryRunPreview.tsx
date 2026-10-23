@@ -1,3 +1,4 @@
+import { AiReview } from './AiReview';
 import { useEffect, useState } from 'react';
 import type { Inspection } from '../forms/schema';
 import { createDryRun, updatedProfile, type MappingInput } from '../mapping/rules';
@@ -77,6 +78,7 @@ function FrozenPreview({ input, inspection, saved, onSaved, checkpoint }: { inpu
         void sendRequest({ type: 'CANCEL_AUTOFILL', sessionId: checkpoint.id, revision: checkpoint.revision, runId }).then(() => setNotice('Cancelled. Further writes stopped. Existing page values and uploads are not rolled back.')).catch(() => setNotice('Cancellation could not be confirmed. Check saved progress.'));
       }}>Cancel autofill</button>}
     </div>
+    <AiReview inspection={inspection} input={input} disabled={!!runId || started} />
     <ol className="mapping-items">{preview.items.map((item) => <li key={item.fieldId} data-testid="mapping-item" data-state={item.state} className="inspected-field">
       <strong>{item.label}</strong> · {item.required ? 'Required' : 'Optional'} · <span>{item.state.replaceAll('_', ' ')}</span>
       <p>{item.reason}</p>

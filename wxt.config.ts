@@ -42,7 +42,7 @@ export default defineConfig({
               id: branding.firefoxId,
               strict_min_version: '140.0',
               // Core filling transmits the user-selected identity/contact/resume to the bound site.
-              data_collection_permissions: { required: ['personallyIdentifyingInfo'], optional: ['authenticationInfo'] },
+              data_collection_permissions: { required: ['personallyIdentifyingInfo'], optional: ['authenticationInfo', 'websiteContent'] },
             },
           },
         }

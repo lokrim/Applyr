@@ -3,6 +3,7 @@ import { ProviderRequestSchema, ProviderFailure, unverified, type Provider, type
 import { createAdapter, type ProviderAdapter } from './adapters';
 import { providerPattern } from './endpoints';
 import type { ProviderStorage } from './storage';
+import type { TaskContext } from '../ai/contracts';
 
 export class ProviderService {
   private queue: Promise<unknown> = Promise.resolve();
@@ -10,7 +11,7 @@ export class ProviderService {
   private active = new Map<Provider, AbortController>();
   private statuses = new Map<Provider, ProviderStatus>();
   private blocked = new Set<Provider>();
-  constructor(private storage: ProviderStorage, private contains: (pattern: string) => Promise<boolean>, private adapter: (provider: Provider) => ProviderAdapter = createAdapter) {}
+  constructor(private storage: ProviderStorage, private contains: (pattern: string) => Promise<boolean>, private adapter: (provider: Provider) => ProviderAdapter = createAdapter, private candidatePermission: () => Promise<boolean> = async () => true) {}
   private serial<T>(work: () => Promise<T>): Promise<T> {
     const next = this.queue.then(work); this.queue = next.catch(() => {}); return next;
   }
@@ -86,14 +87,33 @@ export class ProviderService {
     } finally { if (this.active.get(provider) === controller) this.active.delete(provider); }
     return this.serial(() => this.view(provider));
   }
-  // Future candidate operations must use this gate and recheck their captured epoch before dispatch.
-  // No candidate request/message is implemented in prompt 08.
+  async propose(provider: Provider, context: TaskContext, external: AbortSignal, authorize: () => Promise<boolean> = async () => true) {
+    if (this.active.has(provider)) throw new ProviderFailure('busy');
+    const controller = new AbortController(), epoch = this.epochs.get(provider) ?? 0;
+    const abort = () => controller.abort();
+    external.addEventListener('abort', abort, { once: true });
+    if (external.aborted) abort();
+    this.active.set(provider, controller);
+    const current = () => !controller.signal.aborted && epoch === (this.epochs.get(provider) ?? 0);
+    try {
+      if (!await this.candidateReady(provider) || !current()) throw new ProviderFailure('permission');
+      const { config, key } = await this.serial(async () => ({ config: await this.storage.config(provider), key: await this.storage.key(provider) }));
+      if (!current() || !key || !await authorize() || !current()) throw new ProviderFailure('cancelled');
+      const proposals = await this.adapter(provider).propose(config, key, controller.signal, context);
+      if (!current()) throw new ProviderFailure('cancelled');
+      return { proposals, model: config.model };
+    } finally {
+      external.removeEventListener('abort', abort);
+      if (this.active.get(provider) === controller) this.active.delete(provider);
+    }
+  }
+
   async candidateReady(provider: Provider): Promise<boolean> {
     return this.serial(async () => {
       const view = await this.view(provider);
       return view.hasKey && view.config.candidateConsent && (provider !== 'gemini' || view.config.paidServiceConfirmed)
         && view.status.state === 'verified' && view.status.capability?.model === view.config.model
-        && await this.contains(providerPattern(provider));
+        && await this.contains(providerPattern(provider)) && await this.candidatePermission();
     });
   }
   revokePermissions() {

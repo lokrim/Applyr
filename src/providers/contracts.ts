@@ -26,12 +26,12 @@ export const errorText: Record<ProviderErrorCode, string> = {
   rate_limit: 'Provider is busy or rate limited. Try again when ready.',
   network: 'Connection failed or browser restrictions blocked it. The request may have been billed; retry only when ready.',
   timeout: 'Request timed out. It may already have been billed. Retry only when ready.',
-  refusal: 'The provider refused the synthetic task. No repair request was sent.',
+  refusal: 'The provider refused the task. No repair request was sent.',
   invalid_output: 'The provider returned incomplete or invalid structured output. No repair request was sent.',
   cancelled: 'Request stopped locally. Already delivered requests may still be processed or billed.',
   storage: 'Credential storage is unavailable. No verified connection is available. Retry removal if deletion failed.',
   stale: 'Settings changed in another view. Reload the provider settings before saving.',
-  busy: 'A test is already running for this provider.',
+  busy: 'A request is already running for this provider.',
   invalid_request: 'Unsupported provider settings request.',
 };
 export class ProviderFailure extends Error {

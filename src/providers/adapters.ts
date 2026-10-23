@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { ConfigSchema, KeySchema, ProviderFailure, type Capability, type Provider, type ProviderConfig } from './contracts';
 import { CLAUDE_VERSION, endpoints } from './endpoints';
+import { ContextSchema, type TaskContext, type Proposal } from '../ai/contracts';
+import { AI_INSTRUCTIONS, outputSchema, validateProposals } from '../ai/validation';
 
 export type Transport = (url: string, init: RequestInit) => Promise<Response>;
 export const REQUEST_DEADLINE_MS = 25_000;
@@ -10,16 +12,19 @@ const schema = { type: 'object', properties: { ok: { type: 'boolean' } }, requir
 const ProbeSchema = z.strictObject({ ok: z.literal(true) });
 export interface ProviderAdapter {
   readonly provider: Provider;
-  // No drafting/mapping method is exposed until prompt 09's approval/minimization contracts exist.
+  propose(config: ProviderConfig, key: string, signal: AbortSignal, context: TaskContext): Promise<Proposal[]>;
   testConnection(config: ProviderConfig, key: string, signal: AbortSignal): Promise<Capability>;
 }
 const record = (v: unknown): Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : {};
 const array = (v: unknown): unknown[] => Array.isArray(v) ? v : [];
 
-function body(provider: Provider, model: string): unknown {
-  if (provider === 'openai') return { model, input: PROBE, store: false, max_output_tokens: 256, text: { format: { type: 'json_schema', name: 'connection_probe', strict: true, schema } } };
-  if (provider === 'gemini') return { model, input: PROBE, store: false, stream: false, background: false, generation_config: { max_output_tokens: 256 }, response_format: { type: 'text', mime_type: 'application/json', schema } };
-  return { model, max_tokens: 256, messages: [{ role: 'user', content: PROBE }], output_config: { format: { type: 'json_schema', schema } } };
+function body(provider: Provider, model: string, context?: TaskContext): unknown {
+  const input = context ? `${AI_INSTRUCTIONS}\nTask data: ${JSON.stringify(context)}` : PROBE;
+  const formatSchema = context ? outputSchema(context) : schema;
+  const tokens = context ? 6000 : 256;
+  if (provider === 'openai') return { model, input, store: false, max_output_tokens: tokens, text: { format: { type: 'json_schema', name: context ? 'review_proposals' : 'connection_probe', strict: true, schema: formatSchema } } };
+  if (provider === 'gemini') return { model, input, store: false, stream: false, background: false, generation_config: { max_output_tokens: tokens }, response_format: { type: 'text', mime_type: 'application/json', schema: formatSchema } };
+  return { model, max_tokens: tokens, messages: [{ role: 'user', content: input }], output_config: { format: { type: 'json_schema', schema: formatSchema } } };
 }
 function headers(provider: Provider, key: string, workspace: string): Record<string, string> {
   if (provider === 'gemini') return { 'content-type': 'application/json', 'x-goog-api-key': key };
@@ -90,12 +95,12 @@ function sleep(ms: number, signal: AbortSignal) {
   });
 }
 export function createAdapter(provider: Provider, transport: Transport = fetch, options: { deadlineMs?: number; random?: () => number } = {}): ProviderAdapter {
-  return { provider, async testConnection(rawConfig, rawKey, external) {
+  async function request(rawConfig: ProviderConfig, rawKey: string, external: AbortSignal, context?: TaskContext): Promise<unknown> {
     const parsed = ConfigSchema.safeParse(rawConfig), parsedKey = KeySchema.safeParse(rawKey);
     if (!parsed.success || !parsedKey.success || parsed.data.provider !== provider || !parsed.data.model) throw new ProviderFailure('invalid_request');
     const config = parsed.data, key = parsedKey.data;
     // Do not allow a pasted credential to become a model/workspace/body field.
-    if (config.model.includes(key) || config.workspace.includes(key)) throw new ProviderFailure('invalid_request');
+    if (config.model.includes(key) || config.workspace.includes(key) || (context && JSON.stringify(context).includes(key))) throw new ProviderFailure('invalid_request');
     const controller = new AbortController();
     const abort = () => controller.abort();
     external.addEventListener('abort', abort, { once: true });
@@ -114,7 +119,7 @@ export function createAdapter(provider: Provider, transport: Transport = fetch, 
         if (controller.signal.aborted) throw new ProviderFailure('cancelled');
         let response: Response;
         try {
-          response = await transport(endpoints[provider], { method: 'POST', headers: headers(provider, key, config.workspace), body: JSON.stringify(body(provider, config.model)), redirect: 'error', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer', signal: controller.signal });
+          response = await transport(endpoints[provider], { method: 'POST', headers: headers(provider, key, config.workspace), body: JSON.stringify(body(provider, config.model, context)), redirect: 'error', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer', signal: controller.signal });
         } catch { throw new ProviderFailure('network'); }
         if (controller.signal.aborted) throw new ProviderFailure('cancelled');
         if (response.redirected || (response.url && response.url !== endpoints[provider]) || (response.status >= 300 && response.status < 400)) throw new ProviderFailure('permission');
@@ -133,9 +138,9 @@ export function createAdapter(provider: Provider, transport: Transport = fetch, 
         }
         let value: unknown;
         const text = output(provider, data);
+        if (text.includes(key)) throw new ProviderFailure('invalid_output');
         try { value = JSON.parse(text); } catch { throw new ProviderFailure('invalid_output'); }
-        if (!ProbeSchema.safeParse(value).success) throw new ProviderFailure('invalid_output');
-        return { structuredOutput: true as const, model: config.model, testedAt: Date.now() };
+        return value;
       }
       throw new ProviderFailure('rate_limit');
     };
@@ -145,5 +150,18 @@ export function createAdapter(provider: Provider, transport: Transport = fetch, 
       if (external.aborted) throw new ProviderFailure('cancelled');
       throw e instanceof ProviderFailure ? e : new ProviderFailure('network');
     } finally { clearTimeout(timer); controller.abort(); external.removeEventListener('abort', abort); }
-  } };
+  }
+  return { provider,
+    async testConnection(config, key, signal) {
+      const value = await request(config, key, signal);
+      if (!ProbeSchema.safeParse(value).success) throw new ProviderFailure('invalid_output');
+      return { structuredOutput: true, model: config.model, testedAt: Date.now() };
+    },
+    async propose(config, key, signal, rawContext) {
+      const parsed = ContextSchema.safeParse(rawContext);
+      if (!parsed.success) throw new ProviderFailure('invalid_request');
+      const context = parsed.data;
+      return validateProposals(await request(config, key, signal, context), context);
+    },
+  };
 }

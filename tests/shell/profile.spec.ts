@@ -84,7 +84,7 @@ test('real extension profile setup, import/export, explicit defaults, frozen rep
     // A new options tab imports the exported file with no implicit save.
     const imported = await page('options'); await upload(imported, exported);
     expect(parseProfileMarkdown(await download(imported)).document).toEqual(original);
-    await expect(imported.getByRole('status')).toContainText('Nothing has been saved');
+    await expect(imported.locator('.profile-workspace').getByRole('status')).toContainText('Nothing has been saved');
     await imported.getByText('Review or repair imported Markdown', { exact: true }).click();
     await imported.getByRole('button', { name: 'Return to form', exact: true }).click();
     await validate(imported); expect(parseProfileMarkdown(await download(imported)).document).toEqual(original);
@@ -93,7 +93,7 @@ test('real extension profile setup, import/export, explicit defaults, frozen rep
     await expect(session.getByTestId('frozen-profile-state')).toContainText('saved');
     const firstVersion = await session.getByTestId('frozen-profile-state').innerText();
     await options.getByRole('button', { name: 'Edit saved default' }).click(); await field(options, 'identity.legal_name', 'Updated Fictional Default'); await validate(options); await options.getByRole('button', { name: 'Save as default', exact: true }).click();
-    await expect(options.getByRole('status')).toContainText('Existing frozen inputs were kept');
+    await expect(options.locator('.profile-workspace').getByRole('status')).toContainText('Existing frozen inputs were kept');
     await session.getByRole('button', { name: 'Reload profile state' }).click(); await expect(session.getByTestId('frozen-profile-state')).toHaveText(firstVersion);
     await session.getByRole('button', { name: 'Preview saved default' }).click(); await expect(session.getByTestId('profile-preview')).toContainText('Updated Fictional Default');
     await session.getByRole('button', { name: 'Refresh frozen profile' }).click(); await expect(session.getByTestId('frozen-profile-state')).not.toHaveText(firstVersion);

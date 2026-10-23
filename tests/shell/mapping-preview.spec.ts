@@ -129,6 +129,7 @@ test('React existing/user answers are preserved and a different view refreshing 
   const popup = await inspector.popup(); await expect(popup.getByTestId('page-classification')).toHaveText('application');
   const session = await context.newPage(); await session.goto(popup.url().replace('popup.html', 'session.html'));
   await importProfile(session, profile); await session.getByRole('button', { name: 'Freeze profile for this session', exact: true }).click();
+  await expect(session.getByTestId('frozen-profile-state')).toBeVisible();
   const before = await source.content();
   await session.getByRole('button', { name: 'Inspect fields', exact: true }).click();
   await expect(session.getByTestId('mapping-counts')).toHaveText('3 inspected · 0 proposed · 3 skipped · 0 missing answers · 0 need review · 0 unsupported fields · 0 unsupported areas');

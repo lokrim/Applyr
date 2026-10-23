@@ -7,6 +7,7 @@ import { readCheckpoint, sendIntent } from '../runtime/client';
 import { ProfileSummary, ProfileWorkspace } from './ProfileWorkspace';
 import { DocumentSummary, DocumentWorkspace } from './DocumentWorkspace';
 import { TargetWorkspace } from './TargetWorkspace';
+import { ProviderSettings } from './ProviderSettings';
 
 export type Surface = 'popup' | 'session' | 'options';
 type SourceTab = { id: number; windowId: number };
@@ -94,7 +95,7 @@ export function App({ surface }: { surface: Surface }) {
           <ul className="readiness">
             <li><span>Candidate profile</span><ProfileSummary /></li>
             <li><span>Resume</span><DocumentSummary /></li>
-            <li><span>AI assistance</span><strong>Not configured</strong></li>
+            <li><span>AI assistance</span><strong>Optional · configure in Settings</strong></li>
             <li><span>Session surface</span><strong>{capability}</strong></li>
           </ul>
           <p className="muted">{capability === 'Packaged tab' ? 'A packaged tab is available in this browser.' : 'If the browser declines to open its panel, applyr opens a packaged tab.'}</p>
@@ -119,11 +120,12 @@ export function App({ surface }: { surface: Surface }) {
         {surface !== 'popup' && <DocumentWorkspace key={`documents-${checkpoint?.id ?? 'no-session'}`} surface={surface} sessionId={checkpoint?.id ?? null} onMutation={async () => { setCheckpoint(await readCheckpoint()); }} />}
         {surface !== 'popup' && <ProfileWorkspace key={checkpoint?.id ?? 'no-session'} surface={surface} sessionId={checkpoint?.id ?? null} onFreeze={async () => { setCheckpoint(await readCheckpoint()); }} />}
 
+        {surface === 'options' && <ProviderSettings />}
         {surface === 'options' && <section className="card" aria-labelledby="storage-heading">
           <h2 id="storage-heading">Local recovery & permissions</h2>
           <p>{branding.copy.privacy}</p>
-          <p>Site access is requested per displayed origin through an explicit click. Browser controls can revoke it. Notifications and AI transmission remain off.</p>
-          <p>Saved profiles and reusable resumes stay in extension-origin IndexedDB until explicitly deleted or replaced. Session recovery copies expire after seven days; unsaved documents are also removed on cancellation or finish. Providers are not configured yet.</p>
+          <p>Site access is requested per displayed origin through an explicit click. Browser controls can revoke it. Notifications remain off. Provider testing is optional and always synthetic.</p>
+          <p>Saved profiles and reusable resumes stay in extension-origin IndexedDB until explicitly deleted or replaced. Session recovery copies expire after seven days; unsaved documents are also removed on cancellation or finish.</p>
           <button className="secondary" disabled={busy || !checkpoint} onClick={() => void perform(async () => {
             if (checkpoint) setCheckpoint(await sendIntent({ type: 'FORGET_CHECKPOINT', sessionId: checkpoint.id, revision: checkpoint.revision }));
             setNotice('Setup checkpoint removed from this browser.');

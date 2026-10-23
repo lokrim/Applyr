@@ -15,10 +15,14 @@ import { restrictPreferenceAccess } from '../src/browser/surfaces';
 import { AutofillService } from '../src/runtime/autofill';
 import { operateControl } from '../src/forms/apply';
 import { ContentOperationSchema } from '../src/forms/operations';
+import { ProviderStorage } from '../src/providers/storage';
+import { ProviderService, providerHandler } from '../src/providers/service';
 
 export default defineBackground({
   persistent: false,
   main() {
+    const providers = new ProviderService(new ProviderStorage(getDatabase, browser.storage.session), (pattern) => browser.permissions.contains({ origins: [pattern], ...(import.meta.env.BROWSER === 'firefox' ? { data_collection: ['authenticationInfo'] } : {}) }));
+    const handleProvider = providerHandler(providers, browser.runtime.id, browser.runtime.getURL(branding.pages.options));
     const store = async () => new CheckpointStore(await getDatabase());
     const target = async (tabId: number) => capturedTarget(await browser.tabs.get(tabId), import.meta.env.DEV);
     const access = new PageAccessService({
@@ -69,7 +73,8 @@ export default defineBackground({
     });
     // Callback bridge works with Chrome versions that do not support Promise listeners.
     browser.runtime.onMessage.addListener((message: unknown, sender, respond) => {
-      void handle(message, sender).then(respond);
+      const isProvider = typeof message === 'object' && message !== null && 'channel' in message && message.channel === 'providers';
+      void (isProvider ? handleProvider(message, sender) : handle(message, sender)).then(respond);
       return true;
     });
     const initialize = () => {
@@ -95,7 +100,7 @@ export default defineBackground({
         if (await browser.permissions.contains({ origins: [originPattern(checkpoint.target.origin, import.meta.env.DEV)] })) await access.probe({ sessionId: checkpoint.id, revision: checkpoint.revision });
       })());
     });
-    browser.permissions.onRemoved.addListener((permissions) => safely(access.revoked(permissions.origins ?? [])));
+    browser.permissions.onRemoved.addListener((permissions) => { providers.revokePermissions(); safely(access.revoked(permissions.origins ?? [])); });
     browser.runtime.onStartup.addListener(() => { initialize(); safely(access.event(null, 'restart')); });
     browser.runtime.onInstalled.addListener(initialize);
     initialize();

@@ -46,7 +46,7 @@ test('built extension captures a source, reopens its UI and persists across brow
     await expect(popup.getByRole('heading', { name: 'Saved setup checkpoint' })).toBeVisible();
     await expect(popup.getByTestId('target-tab')).toHaveText(`Source tab #${source.id}`);
     await expect(popup.getByTestId('page-classification')).toHaveText('restricted');
-    await expect(popup.getByText('Not configured', { exact: true })).toBeVisible();
+    await expect(popup.getByText('Optional · configure in Settings', { exact: true })).toBeVisible();
     const checkpointId = await popup.getByTestId('checkpoint-id').innerText();
 
     // Real UI click invokes sidePanel.open or its packaged-tab fallback.

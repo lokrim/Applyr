@@ -66,6 +66,12 @@ footer p { font-size: 11px; margin: 4px 0; }
 .target-workspace input:focus-visible { outline: 2px solid #b16421; outline-offset: 3px; }
 .target-workspace form > button { margin-top: 10px; }
 .target-workspace p, .target-workspace button { overflow-wrap: anywhere; }
+.provider-workspace label { display: block; font-size: 12px; margin: 14px 0 6px; }
+.provider-workspace input:not([type=checkbox]), .provider-workspace select { display: block; width: 100%; border: 1px solid #9daea1; border-radius: 5px; background: #fff; color: #20352d; font: inherit; font-size: 13px; padding: 9px; margin-top: 6px; }
+.provider-workspace input[type=checkbox] { margin-right: 6px; }
+.provider-workspace input:focus-visible, .provider-workspace select:focus-visible { outline: 2px solid #b16421; outline-offset: 3px; }
+.provider-workspace h3 { font-size: 14px; margin-top: 24px; }
+.provider-workspace p, .provider-workspace button { overflow-wrap: anywhere; }
 .frame-access { border-top: 1px solid #dce2d8; padding: 10px 0; }
 .dry-run { border: 1px solid #b9cbb4; background: #f8fbf5; border-radius: 8px; padding: 12px; margin: 16px 0; overflow-wrap: anywhere; }
 .dry-run h3 { margin-top: 0; font-size: 15px; }

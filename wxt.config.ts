@@ -32,7 +32,7 @@ export default defineConfig({
     permissions: ['activeTab', 'scripting', 'storage', ...(browser === 'firefox' ? [] : ['sidePanel'])],
     optional_permissions: ['notifications'],
     optional_host_permissions: ['https://*/*', ...(mode === 'development' ? ['http://localhost/*', 'http://127.0.0.1/*', 'http://[::1]/*'] : [])],
-    content_security_policy: { extension_pages: "script-src 'self'; object-src 'none'; connect-src 'none'" },
+    content_security_policy: { extension_pages: "script-src 'self'; object-src 'none'; connect-src https://api.openai.com https://generativelanguage.googleapis.com https://api.anthropic.com" },
     ...(browser === 'firefox'
       ? {
           background: { scripts: ['background.js'], persistent: false },
@@ -42,7 +42,7 @@ export default defineConfig({
               id: branding.firefoxId,
               strict_min_version: '140.0',
               // Core filling transmits the user-selected identity/contact/resume to the bound site.
-              data_collection_permissions: { required: ['personallyIdentifyingInfo'] },
+              data_collection_permissions: { required: ['personallyIdentifyingInfo'], optional: ['authenticationInfo'] },
             },
           },
         }

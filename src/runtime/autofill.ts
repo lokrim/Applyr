@@ -1,5 +1,5 @@
-import type { SessionCheckpoint } from '../domain/session';
-import { ActionResultSchema, ContentOperationSchema, type ActionResult, type ContentOperation, type Autofill } from '../forms/operations';
+import { transition, terminal, LEASE_MS, type SessionCheckpoint } from '../domain/session';
+import { ActionResultSchema, ContentOperationSchema, recoverySignature, type ActionResult, type ContentOperation, type Autofill } from '../forms/operations';
 import { createDryRun, previewBinding } from '../mapping/rules';
 import type { SessionCorrection, ProposedValue } from '../mapping/schema';
 import type { Inspection } from '../forms/schema';
@@ -14,6 +14,7 @@ import type { IDBPDatabase } from 'idb';
 
 type Start = Extract<Request, { type: 'START_AUTOFILL' }>;
 export class AutofillService {
+  readonly owner = crypto.randomUUID();
   private active: { id: string; sessionId: string; cancelled: boolean; command?: ContentOperation } | null = null;
   constructor(private readonly deps: {
     database: () => Promise<IDBPDatabase<ApplyrDatabase>>; access: PageAccessService;
@@ -24,13 +25,117 @@ export class AutofillService {
     for (let attempt = 0; attempt < 4; attempt++) {
       const store = new CheckpointStore(await this.deps.database()), cp = await store.read();
       if (!cp || cp.id !== sessionId || cp.autofill?.id !== runId) throw new StaleCheckpointError();
-      const next = { ...cp, revision: cp.revision + 1, updatedAt: Date.now(), autofill: change(cp.autofill) };
+      const state = change(cp.autofill);
+      if (state.operations.length > cp.autofill.operations.length && (cp.lifecycle !== 'RUNNING' || cp.lease?.owner !== this.owner || cp.pauseRequested)) throw new StaleCheckpointError();
+      // Results may arrive after pause/cancel; retain them without reviving execution.
+      let next = { ...cp, revision: cp.revision + 1, updatedAt: Date.now(), autofill: state };
+      if (state.status === 'cancelled' && !terminal(cp)) next = { ...transition(cp, { type: 'CANCEL' }, Date.now()), autofill: { ...state, operations: state.operations.map((op) => ({ ...op, recovery: undefined })) } };
+      else if (cp.lifecycle === 'RUNNING' && cp.lease?.owner !== this.owner) throw new StaleCheckpointError();
+      else if (!terminal(cp) && state.status === 'review') next = { ...transition(cp, { type: 'REVIEW' }, Date.now()), autofill: state };
+      else if (!terminal(cp) && state.status === 'interrupted') next = { ...transition(cp, { type: 'INTERRUPT', reason: 'interrupted' }, Date.now()), autofill: state };
+      if (next.lifecycle === 'RUNNING' && state.operations.length > cp.autofill.operations.length) next.phase = 'FILLING';
+      if (next.lease) next.lease = { ...next.lease, expiresAt: Date.now() + LEASE_MS };
       try { await store.replace(next, { sessionId, revision: cp.revision }); this.deps.changed(); return next; }
       catch (e) { if (!(e instanceof StaleCheckpointError) || attempt === 3) throw e; }
     }
     throw new StaleCheckpointError();
   }
+  private async inspecting(sessionId: string, runId: string, validating: boolean) {
+    let cp = await this.boundary(sessionId);
+    if (cp.lifecycle !== 'RUNNING' || cp.lease?.owner !== this.owner || cp.lease.token !== runId) throw new Error('ACCESS_UNAVAILABLE');
+    const phase = validating ? 'VALIDATING' : 'INSPECTING';
+    if (cp.phase !== phase) {
+      const store = new CheckpointStore(await this.deps.database());
+      cp = (await store.replace(transition(cp, { type: 'PHASE', phase }, Date.now()), { sessionId, revision: cp.revision }))!;
+      this.deps.changed();
+    }
+    return cp;
+  }
+  private async interrupted(sessionId: string, runId: string) {
+    const cp = await this.checkpoint();
+    if (cp?.id !== sessionId) return;
+    if (cp.pauseRequested) { await this.boundary(sessionId).catch(() => {}); return; }
+    if (cp.lifecycle === 'RUNNING') await this.save(sessionId, runId, (s) => ({ ...s, status: 'interrupted' })).catch(() => {});
+  }
+  private async result(sessionId: string, runId: string, result: ActionResult) {
+    await new CheckpointStore(await this.deps.database()).recordResult(sessionId, runId, result); this.deps.changed();
+  }
+  async pause(sessionId: string, revision: number) {
+    // Stopping may observe newer progress in this same session. It grants no
+    // write authority and can never stop a different job/session ID.
+    const store = new CheckpointStore(await this.deps.database());
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const cp = await store.read();
+      if (!cp || cp.id !== sessionId || revision > cp.revision) throw new StaleCheckpointError();
+      let next = transition(cp, { type: 'PAUSE' }, Date.now());
+      if (next.pauseRequested && this.active?.sessionId !== sessionId) next = transition(next, { type: 'BOUNDARY' }, Date.now());
+      if (next.lifecycle === 'PAUSED' && next.autofill?.status === 'running') next.autofill = { ...next.autofill, status: 'paused' };
+      try { await store.replace(next, { sessionId, revision: cp.revision }); this.deps.changed(); return next; }
+      catch (error) { if (!(error instanceof StaleCheckpointError) || attempt === 3) throw error; }
+    }
+    throw new StaleCheckpointError();
+  }
+  private async boundary(sessionId: string) {
+    const store = new CheckpointStore(await this.deps.database()), cp = await store.read();
+    if (!cp || cp.id !== sessionId) throw new StaleCheckpointError();
+    if (cp.pauseRequested) {
+      const next = transition(cp, { type: 'BOUNDARY' }, Date.now());
+      if (next.autofill) next.autofill = { ...next.autofill, status: 'paused' };
+      await store.replace(next, { sessionId, revision: cp.revision }); this.deps.changed(); throw new Error('PAUSED');
+    }
+    if (cp.lifecycle === 'PAUSED' || terminal(cp) || cp.recovery?.inspectionRequired || cp.recovery?.reattachRequired) throw new Error('PAUSED');
+    return cp;
+  }
+  async resume(sessionId: string, revision: number) {
+    if (this.active) throw new Error('ACCESS_UNAVAILABLE');
+    const db = await this.deps.database(), store = new CheckpointStore(db), cp = await store.read();
+    if (!cp || cp.id !== sessionId || cp.revision !== revision) throw new StaleCheckpointError();
+    if (terminal(cp) || cp.lifecycle === 'RUNNING' || cp.lease || cp.recovery?.reattachRequired || cp.access?.status !== 'ready') throw new Error('ACCESS_UNAVAILABLE');
+    const input = (await new ProfileStore(db).read()).snapshot;
+    if (!input || input.sessionId !== cp.id) throw new Error('ACCESS_UNAVAILABLE');
+    const fresh = (await this.deps.access.inspect({ sessionId, revision })).inspection;
+    if (!['stable', 'selection_required'].includes(fresh.snapshot.status)) throw new Error('ACCESS_UNAVAILABLE');
+    // Only read current values/selected bytes. Remounted fields stay uncertain.
+    const operations = [];
+    for (const op of cp.autofill?.operations ?? []) {
+      if (op.result && op.result.code !== 'unknown_effect') { operations.push(op); continue; }
+      let result: ActionResult = { operationId: op.id, fieldId: op.fieldId, status: 'unverified', code: 'unknown_effect', selectedBytes: null, siteAcceptance: op.kind === 'upload' ? 'unverified' : 'not_applicable' };
+      const field = fresh.snapshot.fields.find((f) => f.id === op.fieldId);
+      if (field && fresh.snapshot.document === op.binding.document && fresh.frameId === op.binding.frameId && fresh.browserDocumentId === op.binding.browserDocumentId && op.recovery && op.recoverySignature && await recoverySignature(field) === op.recoverySignature) {
+        const response = ActionResultSchema.safeParse(await this.deps.dispatch({ type: 'observe', operationId: op.id, runId: cp.autofill!.id, fieldId: op.fieldId, binding: previewBinding(fresh, input), precondition: field.current.fingerprint, expected: op.recovery }).catch(() => null));
+        if (response.success && response.data.operationId === op.id && response.data.fieldId === op.fieldId) result = response.data;
+      }
+      operations.push({ ...op, result });
+    }
+    const next = { ...transition(cp, { type: 'RESUME' }, Date.now()), recovery: { reason: 'inspected', inspectionRequired: false, reattachRequired: false }, autofill: cp.autofill ? { ...cp.autofill, status: 'interrupted' as const, operations } : undefined };
+    await store.replace(next, { sessionId, revision }); this.deps.changed(); return next;
+  }
+  async releaseInputs(sessionId: string, status: 'cancelled' | 'finished') {
+    const db = await this.deps.database();
+    const tx = db.transaction(['profiles', 'checkpoints'], 'readwrite');
+    const raw = await tx.objectStore('checkpoints').get('current') as SessionCheckpoint | undefined;
+    if (raw?.id === sessionId) await tx.objectStore('profiles').delete('snapshot');
+    await tx.done;
+    const docs = new DocumentStore(db), state = await docs.read();
+    if (state.session?.sessionId === sessionId && state.session.status === 'started') await docs.end(sessionId, state.session.version, status);
+  }
+  async cancelSession(sessionId: string, revision: number) {
+    const store = new CheckpointStore(await this.deps.database());
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const cp = await store.read();
+      if (!cp || cp.id !== sessionId || revision > cp.revision) throw new StaleCheckpointError();
+      if (terminal(cp)) return cp;
+      if (cp.autofill) return this.cancel(sessionId, cp.autofill.id);
+      const next = transition(cp, { type: 'CANCEL' }, Date.now());
+      try { await store.replace(next, { sessionId, revision: cp.revision }); this.deps.changed(); return next; }
+      catch (error) { if (!(error instanceof StaleCheckpointError) || attempt === 3) throw error; }
+    }
+    throw new StaleCheckpointError();
+  }
   async cancel(sessionId: string, runId: string) {
+    const existing = await this.checkpoint();
+    if (!existing || existing.id !== sessionId || existing.autofill?.id !== runId) throw new StaleCheckpointError();
+    if (terminal(existing)) return existing;
     const active = this.active;
     if (active?.id === runId && active.sessionId === sessionId) {
       active.cancelled = true;
@@ -39,10 +144,7 @@ export class AutofillService {
     const cp = await this.save(sessionId, runId, (s) => ({ ...s, status: 'cancelled' }));
     // Cancel releases temporary inputs. Effects already delivered to the website
     // remain observable; neither this nor buffer clearing is a remote rollback.
-    const db = await this.deps.database();
-    const tx = db.transaction('profiles', 'readwrite'); await tx.store.delete('snapshot'); await tx.done;
-    const docs = new DocumentStore(db); const state = await docs.read();
-    if (state.session?.sessionId === sessionId && state.session.status === 'started') await docs.end(sessionId, state.session.version, 'cancelled');
+    await this.releaseInputs(sessionId, 'cancelled');
     this.deps.changed(); return cp;
   }
   // This entry is called only with background-held reviewed proposals by AiService.
@@ -55,11 +157,11 @@ export class AutofillService {
     try {
       const db = await this.deps.database(), cp = await this.checkpoint();
       const input = (await new ProfileStore(db).read()).snapshot;
-      if (!cp || cp.id !== original.sessionId || cp.target.tabId !== original.tabId || !input || input.version !== inputVersion || cp.access?.status !== 'ready' || cp.autofill?.status === 'running' || cp.autofill?.status === 'cancelled' || cp.autofill?.operations.some((o) => !o.result) || (cp.autofill?.operations.length ?? 0) + values.length > 100) throw new Error('ACCESS_UNAVAILABLE');
+      if (!cp || terminal(cp) || cp.lifecycle === 'PAUSED' || cp.recovery?.inspectionRequired || cp.recovery?.reattachRequired || cp.id !== original.sessionId || cp.target.tabId !== original.tabId || !input || input.version !== inputVersion || cp.access?.status !== 'ready' || cp.autofill?.status === 'running' || cp.autofill?.status === 'cancelled' || cp.autofill?.operations.some((o) => !o.result) || (cp.autofill?.operations.length ?? 0) + values.length > 100) throw new Error('ACCESS_UNAVAILABLE');
       const frame = original.frameId === 0 ? undefined : cp.access?.frames.find((f) => f.identity === original.snapshot.identity);
       if (original.frameId !== 0 && !frame) throw new Error('ACCESS_UNAVAILABLE');
-      const inspect = async () => {
-        const latest = await this.checkpoint();
+      const inspect = async (validating = false) => {
+        const latest = started ? await this.inspecting(original.sessionId, active.id, validating) : await this.boundary(original.sessionId);
         if (!latest || latest.id !== cp.id || active.cancelled || (started && latest.autofill?.status !== 'running')) throw new Error('ACCESS_UNAVAILABLE');
         const selected = original.snapshot.forms.length > 1 && original.snapshot.selectedForm ? { formId: original.snapshot.selectedForm, document: original.snapshot.document, revision: original.snapshot.revision } : undefined;
         const fresh = (await this.deps.access.inspect({ sessionId: cp.id, revision: latest.revision }, frame?.origin, frame?.identity, selected)).inspection;
@@ -71,7 +173,7 @@ export class AutofillService {
       if (inspection.snapshot.revision !== original.snapshot.revision) throw new Error('ACCESS_UNAVAILABLE');
       const latest = await this.checkpoint();
       if (!latest || latest.revision !== cp.revision) throw new StaleCheckpointError();
-      await new CheckpointStore(db).replace({ ...latest, revision: latest.revision + 1, updatedAt: Date.now(), autofill: { id: active.id, inputVersion, status: 'running', operations: cp.autofill?.operations ?? [], requiredUnresolved: 0, unsupported: inspection.snapshot.unsupported.length } }, { sessionId: cp.id, revision: latest.revision });
+      await new CheckpointStore(db).replace({ ...transition(latest, { type: 'START', lease: { owner: this.owner, token: active.id, application: latest.target.identity ?? '', expiresAt: Date.now() + LEASE_MS } }, Date.now()), autofill: { id: active.id, inputVersion, status: 'running', operations: cp.autofill?.operations ?? [], requiredUnresolved: 0, unsupported: inspection.snapshot.unsupported.length } }, { sessionId: cp.id, revision: latest.revision });
       started = true; this.deps.changed();
       for (const entry of values) {
         if (active.cancelled) break;
@@ -88,12 +190,13 @@ export class AutofillService {
         if (verified.revision !== current.revision || verified.access?.status !== 'ready') throw new Error('ACCESS_UNAVAILABLE');
         const operationId = crypto.randomUUID();
         const command: ContentOperation = { type: 'write', operationId, runId: active.id, fieldId: field.id, binding: previewBinding(inspection, input), precondition: field.current.fingerprint, value: entry.value, eligibilityApproved: false };
-        await this.save(cp.id, active.id, (s) => ({ ...s, operations: [...s.operations, { id: operationId, fieldId: field.id, kind: 'field', binding: command.binding, precondition: command.precondition, intentAt: Date.now(), result: null }] }));
+        const signature = await recoverySignature(field);
+        await this.save(cp.id, active.id, (s) => ({ ...s, operations: [...s.operations, { id: operationId, fieldId: field.id, kind: 'field', binding: command.binding, precondition: command.precondition, recoverySignature: signature, recovery: entry.value, intentAt: Date.now(), result: null }] }));
         active.command = command;
         let result: ActionResult;
         try {
-          const beforeDispatch = await this.checkpoint();
-          if (!beforeDispatch || active.cancelled || beforeDispatch.autofill?.status !== 'running' || (await new ProfileStore(db).read()).snapshot?.version !== inputVersion) throw new Error('cancelled');
+          const beforeDispatch = await this.boundary(cp.id);
+          if (!beforeDispatch || beforeDispatch.lifecycle !== 'RUNNING' || beforeDispatch.lease?.owner !== this.owner || active.cancelled || beforeDispatch.autofill?.status !== 'running' || (await new ProfileStore(db).read()).snapshot?.version !== inputVersion) throw new Error('cancelled');
           const verifiedDispatch = await this.deps.access.verify(beforeDispatch);
           if (verifiedDispatch.revision !== beforeDispatch.revision || verifiedDispatch.access?.status !== 'ready' || active.cancelled) throw new Error('ACCESS_UNAVAILABLE');
           result = ActionResultSchema.parse(await this.deps.dispatch(ContentOperationSchema.parse(command)));
@@ -101,15 +204,15 @@ export class AutofillService {
         } catch {
           result = { operationId, fieldId: field.id, status: 'unverified', code: 'unknown_effect', selectedBytes: null, siteAcceptance: 'not_applicable' };
         } finally { active.command = undefined; }
-        await this.save(cp.id, active.id, (s) => ({ ...s, operations: s.operations.map((o) => o.id === operationId ? { ...o, result } : o) }));
+        await this.result(cp.id, active.id, result);
         if (result.status !== 'accepted') break;
       }
       if (!active.cancelled) {
-        inspection = await inspect();
+        inspection = await inspect(true);
         await this.save(cp.id, active.id, (s) => ({ ...s, status: 'review', requiredUnresolved: inspection.snapshot.fields.filter((f) => f.required && (!f.current.present || f.validation.valid === false || f.validation.ariaInvalid || f.validation.errorPresent)).length }));
       }
     } catch (e) {
-      if (started && !active.cancelled) await this.save(original.sessionId, active.id, (s) => ({ ...s, status: 'interrupted' })).catch(() => {});
+      if (started && !active.cancelled) await this.interrupted(original.sessionId, active.id);
       throw e;
     } finally { if (this.active === active) this.active = null; this.deps.changed(); }
   }
@@ -123,6 +226,7 @@ export class AutofillService {
     if (!initial || initial.id !== message.sessionId) throw new StaleCheckpointError();
     if (initial.autofill?.id === message.runId) return initial; // Durable request deduplication, including cancelled runs.
     if (initial.revision !== message.revision || initial.autofill?.status === 'cancelled' || initial.autofill?.status === 'running' || initial.autofill?.operations.some((o) => !o.result)) throw new Error('ACCESS_UNAVAILABLE');
+    if (terminal(initial) || initial.lifecycle === 'PAUSED' || initial.recovery?.inspectionRequired || initial.recovery?.reattachRequired) throw new Error('ACCESS_UNAVAILABLE');
     // No concurrent invocation may acquire a second lease while validation awaits.
     if (this.active) throw new Error('ACCESS_UNAVAILABLE');
     const active = { id: message.runId, sessionId: message.sessionId, cancelled: false, command: undefined as ContentOperation | undefined };
@@ -135,8 +239,8 @@ export class AutofillService {
       const frame = message.inspection.frameId === 0 ? undefined : initial.access?.frames.find((f) => f.identity === message.inspection.snapshot.identity);
       if (message.inspection.frameId !== 0 && !frame) throw new Error('ACCESS_UNAVAILABLE');
       let inspection = message.inspection;
-      const inspect = async () => {
-        const cp = await this.checkpoint();
+      const inspect = async (validating = false) => {
+        const cp = started ? await this.inspecting(message.sessionId, active.id, validating) : await this.boundary(message.sessionId);
         if (!cp || cp.id !== message.sessionId || active.cancelled || (started && cp.autofill?.status !== 'running')) throw new Error('ACCESS_UNAVAILABLE');
         const selected = inspection.snapshot.forms.length > 1 && inspection.snapshot.selectedForm ? { formId: inspection.snapshot.selectedForm, document: inspection.snapshot.document, revision: inspection.snapshot.revision } : undefined;
         const next = (await this.deps.access.inspect({ sessionId: cp.id, revision: cp.revision }, frame?.origin, frame?.identity, selected)).inspection;
@@ -147,8 +251,8 @@ export class AutofillService {
       if (JSON.stringify(previewBinding(inspection, frozen)) !== JSON.stringify(previewBinding(message.inspection, frozen))) throw new Error('ACCESS_UNAVAILABLE');
       const cp = await this.checkpoint();
       if (!cp || cp.revision !== message.revision || active.cancelled) throw new StaleCheckpointError();
-      const state: Autofill = { id: message.runId, inputVersion: frozen.version, status: 'running', operations: initial.autofill?.operations ?? [], requiredUnresolved: 0, unsupported: 0 };
-      await new CheckpointStore(db).replace({ ...cp, revision: cp.revision + 1, updatedAt: Date.now(), autofill: state }, { sessionId: cp.id, revision: cp.revision });
+      const state: Autofill = { id: message.runId, inputVersion: frozen.version, documentInput: message.resume, status: 'running', operations: initial.autofill?.operations ?? [], requiredUnresolved: 0, unsupported: 0 };
+      await new CheckpointStore(db).replace({ ...transition(cp, { type: 'START', lease: { owner: this.owner, token: active.id, application: cp.target.identity ?? '', expiresAt: Date.now() + LEASE_MS } }, Date.now()), autofill: state }, { sessionId: cp.id, revision: cp.revision });
       started = true;
       this.deps.changed();
       const original = message.inspection;
@@ -190,11 +294,12 @@ export class AutofillService {
           metadata = { name: file.name, mime: file.type, size: file.size, lastModified: file.lastModified, digest: selected.document.digest };
         }
         const command: ContentOperation = item ? { ...base, type: 'write', value: item.proposal!.value, eligibilityApproved: item.eligibility && item.proposal!.approval === 'session_approved' } : { ...base, type: 'begin', file: metadata! };
-        await this.save(message.sessionId, message.runId, (s) => ({ ...s, operations: [...s.operations, { id: operationId, fieldId: field.id, kind: upload ? 'upload' : 'field', binding, precondition: field.current.fingerprint, intentAt: Date.now(), result: null }] }));
+        const signature = await recoverySignature(field);
+        await this.save(message.sessionId, message.runId, (s) => ({ ...s, operations: [...s.operations, { id: operationId, fieldId: field.id, kind: upload ? 'upload' : 'field', binding, precondition: field.current.fingerprint, recoverySignature: signature, recovery: item ? item.proposal!.value : { kind: 'file', ...metadata! }, intentAt: Date.now(), result: null }] }));
         active.command = command;
         const authorized = async () => {
-          const latest = await this.checkpoint();
-          if (!latest || latest.id !== message.sessionId || latest.autofill?.id !== message.runId || latest.autofill.status !== 'running' || active.cancelled) throw new Error('ACCESS_UNAVAILABLE');
+          const latest = await this.boundary(message.sessionId);
+          if (!latest || latest.id !== message.sessionId || latest.autofill?.id !== message.runId || latest.autofill.status !== 'running' || latest.lifecycle !== 'RUNNING' || latest.lease?.owner !== this.owner || active.cancelled) throw new Error('ACCESS_UNAVAILABLE');
           const verified = await this.deps.access.verify(latest);
           if (verified.revision !== latest.revision || verified.access?.status !== 'ready') throw new Error('ACCESS_UNAVAILABLE');
           const p = (await new ProfileStore(db).read()).snapshot;
@@ -203,6 +308,7 @@ export class AutofillService {
             const d = (await new DocumentStore(db).read()).document;
             if (d?.id !== message.resume?.id || d?.inputVersion !== message.resume?.inputVersion) throw new Error('ACCESS_UNAVAILABLE');
           }
+          if (active.cancelled || (await this.checkpoint())?.lifecycle !== 'RUNNING') throw new Error('ACCESS_UNAVAILABLE');
         };
         let outcome: ActionResult;
         try {
@@ -212,7 +318,7 @@ export class AutofillService {
           const originalField = original.snapshot.fields.find((f) => f.id === field.id);
           if (originalField && originalField.current.fingerprint !== field.current.fingerprint) {
             outcome = { operationId, fieldId: field.id, status: 'skipped_user_change', code: 'user_change', selectedBytes: null, siteAcceptance: upload ? 'unverified' : 'not_applicable' };
-            await this.save(message.sessionId, message.runId, (s) => ({ ...s, operations: s.operations.map((o) => o.id === operationId ? { ...o, result: outcome } : o) }));
+            await this.result(message.sessionId, message.runId, outcome);
             continue;
           }
           let response = await this.deps.dispatch(ContentOperationSchema.parse(command));
@@ -249,11 +355,11 @@ export class AutofillService {
           if (upload) await this.deps.dispatch({ ...base, type: 'clear' }).catch(() => {});
           active.command = undefined;
         }
-        await this.save(message.sessionId, message.runId, (s) => ({ ...s, operations: s.operations.map((o) => o.id === operationId ? { ...o, result: outcome } : o) }));
+        await this.result(message.sessionId, message.runId, outcome);
         if (outcome.code === 'unknown_effect' || outcome.code === 'stale_control' || active.cancelled) break;
       }
       if (!active.cancelled) {
-        inspection = await inspect();
+        inspection = await inspect(true);
         const ledger = (await this.checkpoint())?.autofill?.operations ?? [];
         const remaining = inspection.snapshot.fields.filter((f) => {
           const last = ledger.findLast((o) => o.fieldId === f.id);
@@ -264,7 +370,7 @@ export class AutofillService {
       return this.checkpoint();
     } catch (e) {
       if (!started) throw e;
-      if (!active.cancelled) await this.save(message.sessionId, message.runId, (s) => ({ ...s, status: 'interrupted' })).catch(() => {});
+      if (!active.cancelled) await this.interrupted(message.sessionId, message.runId);
       return this.checkpoint();
     } finally { if (this.active === active) this.active = null; this.deps.changed(); }
   }

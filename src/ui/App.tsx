@@ -7,6 +7,7 @@ import { readCheckpoint, sendIntent } from '../runtime/client';
 import { ProfileSummary, ProfileWorkspace } from './ProfileWorkspace';
 import { DocumentSummary, DocumentWorkspace } from './DocumentWorkspace';
 import { TargetWorkspace } from './TargetWorkspace';
+import { SessionControls } from './SessionControls';
 import { ProviderSettings } from './ProviderSettings';
 
 export type Surface = 'popup' | 'session' | 'options';
@@ -74,7 +75,7 @@ export function App({ surface }: { surface: Surface }) {
 
       {!loading && <>
         <section className="card" aria-labelledby="checkpoint-heading">
-          <div className="section-heading"><h2 id="checkpoint-heading">{checkpoint ? 'Saved setup checkpoint' : 'No saved checkpoint'}</h2><span className="pill">{checkpoint?.lifecycle === 'NEEDS_ATTENTION' ? 'Needs attention' : checkpoint ? 'Setup needed' : 'Empty'}</span></div>
+          <div className="section-heading"><h2 id="checkpoint-heading">{checkpoint ? 'Saved setup checkpoint' : 'No saved checkpoint'}</h2><span className="pill">{checkpoint?.lifecycle === 'NEEDS_ATTENTION' ? 'Needs attention' : checkpoint?.lifecycle === 'QUEUED' && checkpoint.phase === 'SETUP' ? 'Setup needed' : checkpoint ? checkpoint.lifecycle.replaceAll('_', ' ').toLowerCase() : 'Empty'}</span></div>
           {checkpoint ? <>
             <p className="target" data-testid="target-origin">{checkpoint.target.origin ?? (checkpoint.target.availability === 'restricted' ? 'Browser or unsupported page' : 'Site address unavailable')}</p>
             <p data-testid="target-tab">Source tab #{checkpoint.target.tabId}</p>
@@ -88,6 +89,7 @@ export function App({ surface }: { surface: Surface }) {
           </> : <p>Open the toolbar popup on your intended application tab to save a source reference. No profile has been added.</p>}
         </section>
 
+        {checkpoint && <SessionControls checkpoint={checkpoint} onChange={setCheckpoint} />}
         <TargetWorkspace key={`target-${checkpoint?.id ?? 'empty'}`} checkpoint={checkpoint} onChange={setCheckpoint} />
 
         <section className="card" aria-labelledby="readiness-heading">

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { IDBPDatabase, IDBPTransaction } from 'idb';
 import type { ApplyrDatabase } from './database';
 import type { DocumentRef } from '../domain/document';
-import { RECOVERY_TTL_MS } from '../domain/session';
+import { RECOVERY_TTL_MS, terminal } from '../domain/session';
 import { CheckpointSchema } from '../runtime/schemas';
 import { DocumentError, MAX_PDF_BYTES, pdfDigest, selectPdf } from '../documents/pdf';
 
@@ -150,7 +150,7 @@ export class DocumentStore {
       const checkpoint = await this.clean(tx);
       const links = tx.objectStore('documentLinks');
       const old = SessionSchema.safeParse(await links.get('session'));
-      if (!checkpoint || checkpoint.id !== sessionId || (old.success ? old.data.version : null) !== expectedSessionVersion || (old.success && ['finished', 'cancelled'].includes(old.data.status))) throw new DocumentError('STALE');
+      if (!checkpoint || terminal(checkpoint) || checkpoint.id !== sessionId || (old.success ? old.data.version : null) !== expectedSessionVersion || (old.success && ['finished', 'cancelled'].includes(old.data.status))) throw new DocumentError('STALE');
       let blobRef: string | undefined;
       if (selection.source === 'saved') {
         const saved = DocumentRefSchema.safeParse(await tx.objectStore('documents').get(selection.id));

@@ -88,7 +88,7 @@ test('F11 real packaged settings isolate credentials; all native transports are 
       expect(isolated).toMatchObject({ readable: false, reply: { ok: false, code: 'permission' } });
       await section.getByRole('button', { name: 'Remove key', exact: true }).click();
       await expect(section.getByTestId('key-presence')).toHaveText('No key stored'); await expect(status).toContainText('Unverified');
-      expect(await options.evaluate(() => chrome.storage.session.get(null))).toEqual({});
+      expect(await options.evaluate(() => chrome.storage.session.get(null))).toEqual({ 'applyr-session-epoch': expect.stringMatching(/^[a-f0-9-]{36}$/) });
     }
     // Explicit remember is durable, revocation clears it. All tests still synthetic.
     await section.getByLabel('API key', { exact: true }).fill(CREDENTIAL_CANARY);
@@ -105,7 +105,7 @@ test('F11 real packaged settings isolate credentials; all native transports are 
     const finalCredentials = await options.evaluate(async () => {
       const d = await new Promise<IDBDatabase>((r) => { const q = indexedDB.open('applyr-local'); q.onsuccess = () => r(q.result); });
       return new Promise<unknown[]>((r) => { const q = d.transaction('providerCredentials').objectStore('providerCredentials').getAll(); q.onsuccess = () => { d.close(); r(q.result); }; });
-    }); expect(finalCredentials).toEqual([]); expect(await options.evaluate(() => chrome.storage.session.get(null))).toEqual({});
+    }); expect(finalCredentials).toEqual([]); expect(await options.evaluate(() => chrome.storage.session.get(null))).toEqual({ 'applyr-session-epoch': expect.stringMatching(/^[a-f0-9-]{36}$/) });
     const audit = await worker.evaluate(() => (globalThis as unknown as { providerAudit: { calls: unknown[] } }).providerAudit);
     expect(audit.calls).toEqual(['openai', 'gemini', 'claude'].map((provider) => ({ provider, headerOnly: true, synthetic: true, safeOptions: true })));
     expect(externalRequests).toEqual([]); expect(logs.join('\n')).not.toContain(CREDENTIAL_CANARY);

@@ -76,7 +76,7 @@ test('built extension captures a source, reopens its UI and persists across brow
     context = running.launched;
     const restored = await packagedPage(running.worker, `${running.base}/session.html`);
     await expect(restored.getByTestId('checkpoint-id')).toHaveText(checkpointId);
-    await expect(restored.getByText('Tab IDs must be rebound after a browser restart.', { exact: false })).toBeVisible();
+    await expect(restored.getByRole('region', { name: 'Saved setup checkpoint', exact: true }).getByText('Tab IDs must be rebound after a browser restart.', { exact: false })).toBeVisible();
     // Orderly Chromium shutdown can close the bound tab before startup fires.
     // Either event must leave durable attention and prevent automatic probing.
     await expect(restored.getByTestId('page-status')).toHaveText('Needs attention');

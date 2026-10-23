@@ -1,5 +1,5 @@
 import type { SessionCheckpoint, TargetReference } from '../domain/session';
-import { createCheckpoint } from '../domain/session';
+import { createCheckpoint, transition } from '../domain/session';
 import { RequestSchema, type Response } from './schemas';
 import { trustedPage, type Sender } from '../security/sender';
 import { CheckpointStore, StaleCheckpointError } from '../storage/checkpoints';
@@ -15,6 +15,8 @@ export interface CoordinatorDependencies {
   uuid: () => string;
   access?: PageAccessService;
   autofill?: AutofillService;
+  changed?: () => void;
+  discardAi?: () => void;
 }
 
 export function createCoordinator(dependencies: CoordinatorDependencies) {
@@ -31,12 +33,41 @@ export function createCoordinator(dependencies: CoordinatorDependencies) {
       const store = await dependencies.store();
       let checkpoint: SessionCheckpoint | null = null;
       switch (message.type) {
+        case 'RESTORE_SESSION':
+          dependencies.discardAi?.(); checkpoint = await store.restore(message.archivedId, message); break;
+        case 'REATTACH_SESSION':
+          if (!dependencies.access) return fail('ACCESS_UNAVAILABLE');
+          dependencies.discardAi?.(); checkpoint = await dependencies.access.reattach(message, message.tabId); break;
+        case 'RESUME_SESSION':
+          if (!dependencies.autofill) return fail('ACCESS_UNAVAILABLE');
+          dependencies.discardAi?.(); checkpoint = await dependencies.autofill.resume(message.sessionId, message.revision); break;
+        case 'PAUSE_SESSION':
+          if (!dependencies.autofill) return fail('ACCESS_UNAVAILABLE');
+          { const cp = await store.read(); if (!cp || cp.id !== message.sessionId || message.revision > cp.revision) throw new StaleCheckpointError(); }
+          dependencies.discardAi?.(); checkpoint = await dependencies.autofill.pause(message.sessionId, message.revision); break;
+        case 'CANCEL_SESSION':
+          if (!dependencies.autofill) return fail('ACCESS_UNAVAILABLE');
+          { const cp = await store.read(); if (!cp || cp.id !== message.sessionId || message.revision > cp.revision) throw new StaleCheckpointError(); }
+          dependencies.discardAi?.(); checkpoint = await dependencies.autofill.cancelSession(message.sessionId, message.revision); break;
+        case 'FINISH_SESSION':
+        case 'REPORT_SUBMISSION':
+        case 'FINAL_REVIEW': {
+          const cp = await store.read();
+          if (!cp || cp.id !== message.sessionId || cp.revision !== message.revision) throw new StaleCheckpointError();
+          if (message.type === 'FINAL_REVIEW' && cp.lifecycle !== 'READY_FOR_REVIEW') throw new Error('ACCESS_UNAVAILABLE');
+          const event = message.type === 'FINISH_SESSION' ? { type: 'FINISH' as const } : message.type === 'FINAL_REVIEW' ? { type: 'REVIEW' as const, scope: 'final_review' as const } : { type: 'REPORT_SUBMISSION' as const };
+          const next = transition(cp, event, dependencies.now());
+          if (message.type === 'FINISH_SESSION') dependencies.discardAi?.();
+          checkpoint = await store.replace(next, { sessionId: cp.id, revision: cp.revision });
+          if (message.type === 'FINISH_SESSION') await dependencies.autofill?.releaseInputs(cp.id, 'finished');
+          break;
+        }
         case 'START_AUTOFILL':
           if (!dependencies.autofill) return fail('ACCESS_UNAVAILABLE');
           checkpoint = await dependencies.autofill.start(message); break;
         case 'CANCEL_AUTOFILL':
           if (!dependencies.autofill) return fail('ACCESS_UNAVAILABLE');
-          checkpoint = await dependencies.autofill.cancel(message.sessionId, message.runId); break;
+          dependencies.discardAi?.(); checkpoint = await dependencies.autofill.cancel(message.sessionId, message.runId); break;
         case 'INSPECT_FORM': {
           if (!dependencies.access) return fail('ACCESS_UNAVAILABLE');
           const result = await dependencies.access.inspect(message, message.frameOrigin, message.frameIdentity, message.selection);
@@ -61,6 +92,7 @@ export function createCoordinator(dependencies: CoordinatorDependencies) {
           let target: TargetReference;
           try { target = await dependencies.target(message.tabId); }
           catch { return fail('TAB_UNAVAILABLE'); }
+          dependencies.discardAi?.();
           const next = createCheckpoint(target, dependencies.uuid(), dependencies.now());
           if (dependencies.access) next.access = initialAccess(target);
           checkpoint = await store.replace(next, message);
@@ -76,7 +108,7 @@ export function createCoordinator(dependencies: CoordinatorDependencies) {
           }
           break;
         }
-        case 'FORGET_CHECKPOINT': checkpoint = await store.replace(null, message); break;
+        case 'FORGET_CHECKPOINT': dependencies.discardAi?.(); checkpoint = await store.replace(null, message); break;
         case 'PROBE_TARGET':
           if (!dependencies.access) return fail('ACCESS_UNAVAILABLE');
           checkpoint = await dependencies.access.probe(message, message.frameOrigin, message.frameIdentity); break;
@@ -85,8 +117,9 @@ export function createCoordinator(dependencies: CoordinatorDependencies) {
           checkpoint = await dependencies.access.edit(message, message.role, message.company); break;
         case 'OPEN_APPLICATION':
           if (!dependencies.access) return fail('ACCESS_UNAVAILABLE');
-          checkpoint = await dependencies.access.open(message, message.url); break;
+          dependencies.discardAi?.(); checkpoint = await dependencies.access.open(message, message.url); break;
       }
+      if (message.type !== 'GET_STATE') dependencies.changed?.();
       return { schemaVersion: 1, requestId: message.requestId, ok: true, checkpoint };
     } catch (error) {
       if (error instanceof StaleCheckpointError) return fail('STALE_CHECKPOINT');

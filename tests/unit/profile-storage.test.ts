@@ -103,7 +103,7 @@ describe('saved default / frozen session isolation in versioned IndexedDB', () =
     expect(await profiles.read()).toEqual({ saved: null, snapshot: null });
     saved = await profiles.saveDefault(document('Again'), null);
     await profiles.freeze(id, { source: 'saved', savedVersion: saved.version }, null);
-    await checkpoints.replace(createCheckpoint(target, crypto.randomUUID(), now), { sessionId: id, revision: 2 });
+    await checkpoints.replace(createCheckpoint(target, crypto.randomUUID(), now), { sessionId: id, revision: (await checkpoints.read())!.revision });
     expect(await database.get('profiles', 'snapshot')).toBeUndefined();
   });
 

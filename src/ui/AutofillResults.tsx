@@ -14,8 +14,9 @@ export function AutofillResults({ checkpoint }: { checkpoint: SessionCheckpoint 
     {state.status === 'running' && <><p>An operation may be in progress or interrupted. Reloading never retries it. Reinspect the form before any further action.</p><button onClick={() => void sendRequest({ type: 'CANCEL_AUTOFILL', sessionId: checkpoint.id, revision: checkpoint.revision, runId: state.id }).catch(() => setNotice('Cancellation could not be confirmed. Refresh saved progress before proceeding.'))}>Cancel autofill</button></>}
     {notice && <p role="alert">{notice}</p>}
     {state.status === 'cancelled' && <p>Further writes stopped. Existing page values and uploads are not rolled back. Start a separate session for another run.</p>}
+    {state.status === 'paused' && <p>Paused. Resume and reinspect before starting further writes.</p>}
     {state.status === 'interrupted' && <p>Autofill stopped for review. Reinspect the page; unknown operations are never blindly retried.</p>}
     <ul>{state.operations.map((o) => <li key={o.id}>{o.kind} · {o.result?.status.replaceAll('_', ' ') ?? 'unknown effect — inspect before proceeding'} · {o.result?.code.replaceAll('_', ' ')}{o.kind === 'upload' && <span> · Selected bytes: {o.result?.selectedBytes === true ? 'verified equal' : 'not verified'} · Site acceptance: {o.result?.siteAcceptance ?? 'unverified'}. Manual review/upload may be needed.</span>}</li>)}</ul>
-    <p>Submission status: unknown. applyr never advances or submits the form.</p>
+    <p>Submission status: {checkpoint.submission.status === 'reported_by_user' ? 'reported by you' : 'unknown'}. applyr never advances or submits the form.</p>
   </section>;
 }

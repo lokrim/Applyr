@@ -12,7 +12,7 @@ import { notifyProfileChange, onProfileChange, onProfileDeletion } from '../brow
 import type { SessionCheckpoint } from '../domain/session';
 import { DocumentStore } from '../storage/documents';
 import type { DocumentRef } from '../domain/document';
-import { sendRequest } from '../runtime/client';
+import { readCheckpoint, sendRequest } from '../runtime/client';
 
 const store = async () => new ProfileStore(await getDatabase());
 export function DryRunPreview({ inspection, inputVersion, checkpoint }: { inspection: Inspection; inputVersion: string | null; checkpoint: SessionCheckpoint }) {
@@ -68,9 +68,9 @@ function FrozenPreview({ input, inspection, saved, onSaved, checkpoint }: { inpu
       <h4>Deterministic autofill</h4>
       <p>Start permits the displayed deterministic proposals on this bound form. The website may autosave values and uploads before submission. Recovery details expire with this session within seven days. Consent stays on the website; eligibility needs the explicit session confirmation below. You use Next and submit yourself.</p>
       {resume ? <><p>Selected session resume: {resume.filename} · {resume.size} bytes · input {resume.inputVersion}</p><label className="check-label"><input type="checkbox" checked={upload} disabled={!!runId || started} onChange={(e) => setUpload(e.target.checked)} />Include this resume in a uniquely identified native resume field</label></> : <p>No session resume included. Start a local document session first to include a PDF.</p>}
-      <button disabled={!!runId || started || checkpoint.autofill?.status === 'running' || checkpoint.autofill?.status === 'cancelled' || (!counts.proposed && !upload)} onClick={() => {
+      <button disabled={!!runId || started || checkpoint.autofill?.status === 'running' || checkpoint.autofill?.status === 'cancelled' || checkpoint.lifecycle === 'PAUSED' || ['CANCELLED', 'AUTOFILL_FINISHED', 'FAILED'].includes(checkpoint.lifecycle) || checkpoint.recovery?.inspectionRequired || checkpoint.recovery?.reattachRequired || (!counts.proposed && !upload)} onClick={() => {
         const id = crypto.randomUUID(); setRunId(id); setStarted(true); setNotice('Filling permitted fields and checking current-step validation…');
-        void sendRequest({ type: 'START_AUTOFILL', sessionId: checkpoint.id, revision: checkpoint.revision, runId: id, inspection, inputVersion: input.version, corrections, resume: upload && resume ? { id: resume.id, inputVersion: resume.inputVersion } : null })
+        void readCheckpoint().then((latest) => { if (latest?.id !== checkpoint.id) throw new Error('Session changed. Reinspect before Start.'); return sendRequest({ type: 'START_AUTOFILL', sessionId: checkpoint.id, revision: latest.revision, runId: id, inspection, inputVersion: input.version, corrections, resume: upload && resume ? { id: resume.id, inputVersion: resume.inputVersion } : null }); })
           .then(() => setNotice('Current-step results saved. Review on the website; use Next and submit yourself.'))
           .catch((e: unknown) => setNotice(e instanceof Error ? e.message : 'Autofill interrupted. Reinspect before any new action.')).finally(() => setRunId(null));
       }}>Start Autofill</button>
@@ -78,7 +78,7 @@ function FrozenPreview({ input, inspection, saved, onSaved, checkpoint }: { inpu
         void sendRequest({ type: 'CANCEL_AUTOFILL', sessionId: checkpoint.id, revision: checkpoint.revision, runId }).then(() => setNotice('Cancelled. Further writes stopped. Existing page values and uploads are not rolled back.')).catch(() => setNotice('Cancellation could not be confirmed. Check saved progress.'));
       }}>Cancel autofill</button>}
     </div>
-    <AiReview inspection={inspection} input={input} disabled={!!runId || started} />
+    <AiReview inspection={inspection} input={input} disabled={!!runId || started || checkpoint.lifecycle === 'PAUSED' || ['CANCELLED', 'AUTOFILL_FINISHED', 'FAILED'].includes(checkpoint.lifecycle) || !!checkpoint.recovery?.inspectionRequired || !!checkpoint.recovery?.reattachRequired} />
     <ol className="mapping-items">{preview.items.map((item) => <li key={item.fieldId} data-testid="mapping-item" data-state={item.state} className="inspected-field">
       <strong>{item.label}</strong> · {item.required ? 'Required' : 'Optional'} · <span>{item.state.replaceAll('_', ' ')}</span>
       <p>{item.reason}</p>

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { FormSnapshot } from './schema';
 import { PreviewBindingSchema, ProposedValueSchema } from '../mapping/schema';
 
 const id = z.string().uuid();
@@ -12,10 +13,12 @@ export const ActionResultSchema = z.strictObject({
 export type ActionResult = z.infer<typeof ActionResultSchema>;
 export const OperationSchema = z.strictObject({
   id, fieldId: id, kind: z.enum(['field', 'upload']), binding: PreviewBindingSchema,
+  recoverySignature: hash.optional(),
+  recovery: z.union([ProposedValueSchema, z.strictObject({ kind: z.literal('file'), name: z.string().max(255), mime: z.string().max(128), size: z.number().int().positive(), lastModified: z.number().int().nonnegative(), digest: hash })]).optional(),
   precondition: hash, intentAt: z.number().int().nonnegative(), result: ActionResultSchema.nullable(),
 });
 export const AutofillSchema = z.strictObject({
-  id, inputVersion: id, status: z.enum(['running', 'review', 'cancelled', 'interrupted']),
+  id, inputVersion: id, documentInput: z.strictObject({ id, inputVersion: id }).nullable().optional(), status: z.enum(['running', 'review', 'cancelled', 'interrupted', 'paused']),
   operations: z.array(OperationSchema).max(100),
   requiredUnresolved: z.number().int().nonnegative(), unsupported: z.number().int().nonnegative(),
 });
@@ -28,7 +31,14 @@ export const ContentOperationSchema = z.discriminatedUnion('type', [
   z.strictObject({ ...base, type: z.literal('chunk'), offset: z.number().int().nonnegative(), bytes: z.array(z.number().int().min(0).max(255)).min(1).max(64 * 1024) }),
   z.strictObject({ ...base, type: z.literal('commit') }),
   z.strictObject({ ...base, type: z.literal('verify') }),
+  z.strictObject({ ...base, type: z.literal('observe'), expected: OperationSchema.shape.recovery }),
   z.strictObject({ ...base, type: z.literal('cancel') }),
   z.strictObject({ ...base, type: z.literal('clear') }),
 ]);
 export type ContentOperation = z.infer<typeof ContentOperationSchema>;
+
+// Persist a digest of semantics, never a DOM reference or current page value.
+export async function recoverySignature(field: FormSnapshot['fields'][number]) {
+  const bytes = new TextEncoder().encode(JSON.stringify([field.id, field.label, field.labelSource, field.context, field.type, field.autocomplete, field.required, field.executable, field.category, field.filePurpose, field.constraints, field.options, field.radioGroup ? [field.radioGroup.primary, field.radioGroup.label] : null]));
+  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (b) => b.toString(16).padStart(2, '0')).join('');
+}

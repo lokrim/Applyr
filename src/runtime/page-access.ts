@@ -1,5 +1,5 @@
 import type { PageAccess, SessionCheckpoint, TargetReference } from '../domain/session';
-import { createCheckpoint } from '../domain/session';
+import { createCheckpoint, transition, terminal } from '../domain/session';
 import { displayText, originPattern, parseApplicationUrl, sanitizedUrl } from '../browser/addresses';
 import { ProbeSchema } from './schemas';
 import { CheckpointStore, StaleCheckpointError } from '../storage/checkpoints';
@@ -34,7 +34,9 @@ export class PageAccessService {
   }
 
   private async write(checkpoint: SessionCheckpoint, access: PageAccess, target = checkpoint.target) {
-    const next: SessionCheckpoint = { ...checkpoint, target, access, lifecycle: access.status === 'needs_attention' ? 'NEEDS_ATTENTION' : 'QUEUED', revision: checkpoint.revision + 1, updatedAt: this.deps.now() };
+    const blocked = access.status === 'needs_attention' && !terminal(checkpoint);
+    const next: SessionCheckpoint = { ...(blocked ? transition(checkpoint, { type: 'INTERRUPT', reason: access.reason, reattach: ['restart', 'navigation', 'closed'].includes(access.reason) }, this.deps.now()) : { ...checkpoint, revision: checkpoint.revision + 1, updatedAt: this.deps.now() }), target, access };
+    if (blocked && next.autofill?.status === 'running') next.autofill = { ...next.autofill, status: 'interrupted' };
     await (await this.deps.store()).replace(next, { sessionId: checkpoint.id, revision: checkpoint.revision });
     this.deps.changed(); return next;
   }
@@ -116,6 +118,16 @@ export class PageAccessService {
     if (frame && frame.origin !== checkpoint.target.origin && !await this.deps.contains(frame.origin)) throw new Error('ACCESS_UNAVAILABLE');
     // Snapshots never enter checkpoints, IndexedDB, preferences, or history.
     return { checkpoint, inspection: InspectionSchema.parse({ sessionId: checkpoint.id, tabId: checkpoint.target.tabId, frameId: injected!.frameId, browserDocumentId: injected!.documentId ?? null, snapshot: snapshot.data }) };
+  }
+
+
+  async reattach(binding: Binding, tabId: number) {
+    const cp = await this.current(binding), target = await this.deps.target(tabId);
+    if (terminal(cp) || !cp.target.identity || target.identity !== cp.target.identity || target.origin !== cp.target.origin) throw new Error('ACCESS_UNAVAILABLE');
+    const next = { ...transition(cp, { type: 'INTERRUPT', reason: 'reattached' }, this.deps.now()), target, access: initialAccess(target) };
+    await (await this.deps.store()).replace(next, { sessionId: cp.id, revision: cp.revision });
+    this.deps.changed();
+    return this.probe({ sessionId: next.id, revision: next.revision });
   }
 
   async open(binding: Binding, raw: string) {

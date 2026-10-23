@@ -96,11 +96,15 @@ test('F11 packaged essay and mapping batch: source review, edit/approve/reject, 
   await ai.getByLabel('Decision for Why this role?', { exact: true }).selectOption('approve');
   await ai.getByLabel('I reviewed the evidence, factual claims, wording and length limits for every approved answer').check();
   await ai.getByRole('button', { name: 'Apply batch decisions and insert approved values' }).click();
-  await expect(ai).toContainText('Reinspect and review a fresh batch');
+  await expect(session.getByRole('region', { name: 'Session recovery' })).toContainText('approval changed');
+  await expect(ai).toHaveCount(0);
   await expect(source.getByLabel('Why this role?', { exact: true })).toHaveValue('User-authored answer to preserve.');
   await expect(session.getByTestId('autofill-results')).toContainText('2 accepted'); expect(await readProfiles()).toEqual(before);
-  await ai.getByRole('button', { name: 'Continue without AI / reject batch' }).click();
+  await session.getByRole('button', { name: 'Resume and reinspect', exact: true }).click();
+  await expect(session.getByRole('heading', { name: 'Session: queued', exact: true })).toBeVisible();
+  await session.getByRole('button', { name: 'Inspect fields', exact: true }).click();
   await expect(ai.getByLabel('AI provider', { exact: true })).toHaveValue('');
+  await expect(ai.getByTestId('ai-proposal')).toHaveCount(0);
   expect(await source.evaluate(() => (window as unknown as { fixture: { finalizations: number } }).fixture.finalizations)).toBe(0);
 
 });

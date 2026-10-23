@@ -128,7 +128,7 @@ export function createAdapter(provider: Provider, transport: Transport = fetch, 
         catch (e) { if (response.ok) throw e; data = null; }
         if (!response.ok) {
           const failure = httpFailure(response.status, data);
-          if (failure.code !== 'rate_limit' || attempt === 2) throw failure;
+          if (context || failure.code !== 'rate_limit' || attempt === 2) throw failure;
           const retry = response.headers.get('retry-after');
           const retryMs = retry === null ? 0 : /^\d+(\.\d+)?$/.test(retry) ? Number(retry) * 1000 : Date.parse(retry) - Date.now();
           const jitter = Math.floor((options.random ?? Math.random)() * 200);

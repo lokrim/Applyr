@@ -1,5 +1,6 @@
 import { defineBackground } from 'wxt/utils/define-background';
 import { browser } from 'wxt/browser';
+import { onProfileDeletion } from '../src/browser/profile-events';
 import { branding } from '../src/branding';
 import { createCoordinator } from '../src/runtime/coordinator';
 import { getDatabase } from '../src/storage/database';
@@ -61,7 +62,8 @@ export default defineBackground({
         return found.length === 1 ? found[0]!.result : null;
       },
     });
-    const ai = new AiService(getDatabase, providers, autofill);
+    const ai = new AiService(getDatabase, providers, autofill, changed);
+    onProfileDeletion(() => ai.discard());
     const handleAi = aiHandler(ai, browser.runtime.id, [browser.runtime.getURL(branding.pages.session), browser.runtime.getURL(branding.pages.options)]);
     const handle = createCoordinator({
       extensionId: browser.runtime.id,
@@ -70,15 +72,25 @@ export default defineBackground({
         session: browser.runtime.getURL(branding.pages.session),
         options: browser.runtime.getURL(branding.pages.options),
       },
-      store, target, access, autofill,
+      store, target, access, autofill, changed, discardAi: () => ai.discard(),
       now: Date.now,
       uuid: () => crypto.randomUUID(),
     });
+    // Recovery starts on every worker/event-page instantiation. Listener registration
+    // below remains synchronous; every handler gates work on this finite promise.
+    const ready = (async () => {
+      const marker = await browser.storage.session.get('applyr-session-epoch');
+      const restart = typeof marker['applyr-session-epoch'] !== 'string';
+      if (restart) await browser.storage.session.set({ 'applyr-session-epoch': crypto.randomUUID() });
+      await (await store()).recover(autofill.owner, restart);
+      if (restart) await access.event(null, 'restart');
+    })();
+    void ready.catch(() => { /* Requests report the storage failure. */ });
     // Callback bridge works with Chrome versions that do not support Promise listeners.
     browser.runtime.onMessage.addListener((message: unknown, sender, respond) => {
       const isProvider = typeof message === 'object' && message !== null && 'channel' in message && message.channel === 'providers';
       const isAi = typeof message === 'object' && message !== null && 'channel' in message && message.channel === 'ai';
-      void (isProvider ? handleProvider(message, sender) : isAi ? handleAi(message, sender) : handle(message, sender)).then(respond);
+      void ready.then<unknown>(() => isProvider ? handleProvider(message, sender) : isAi ? handleAi(message, sender) : handle(message, sender)).then(respond).catch(() => respond({ schemaVersion: 1, requestId: null, ok: false, code: 'STORAGE_UNAVAILABLE' }));
       return true;
     });
     const initialize = () => {
@@ -88,24 +100,25 @@ export default defineBackground({
       void getDatabase().then((database) => new DocumentStore(database).read()).catch(() => { /* UI reports bounded document storage failures. */ });
     };
     // Events observe only the bound tab. No activation listener can retarget it.
-    const safely = (operation: Promise<unknown>) => { void operation.catch(() => { /* A subsequent UI read revalidates binding; no page writes exist. */ }); };
-    browser.tabs.onRemoved.addListener((tabId) => safely(access.event(tabId, 'closed')));
-    browser.tabs.onReplaced.addListener((_added, removed) => safely(access.event(removed, 'closed')));
+    const safely = (operation: Promise<unknown>) => { void operation.catch(() => { /* Durable preconditions prevent writes until revalidation. */ }); };
+    browser.tabs.onRemoved.addListener((tabId) => safely(ready.then(async () => { const cp = await (await store()).read(); if (cp?.target.tabId === tabId) ai.discard(); await access.event(tabId, 'closed'); })));
+    browser.tabs.onReplaced.addListener((_added, removed) => safely(ready.then(async () => { const cp = await (await store()).read(); if (cp?.target.tabId === removed) ai.discard(); await access.event(removed, 'closed'); })));
     browser.tabs.onUpdated.addListener((tabId, change) => {
-      if (change.url || change.status === 'loading') safely((async () => {
+      if (change.url || change.status === 'loading') safely(ready.then(async () => {
         const checkpoint = await (await store()).read();
         if (checkpoint?.target.tabId !== tabId) return;
+        ai.discard();
         const verified = await access.verify(checkpoint);
         if (verified.access?.reason !== 'navigation') await access.event(tabId, 'reload');
-      })());
-      if (change.status === 'complete') safely((async () => {
+      }));
+      if (change.status === 'complete') safely(ready.then(async () => {
         const checkpoint = await (await store()).read();
         if (checkpoint?.target.tabId !== tabId || !checkpoint.target.origin || checkpoint.access?.inspectedAt || !['permission', 'reload'].includes(checkpoint.access?.reason ?? '')) return;
         if (await browser.permissions.contains({ origins: [originPattern(checkpoint.target.origin, import.meta.env.DEV)] })) await access.probe({ sessionId: checkpoint.id, revision: checkpoint.revision });
-      })());
+      }));
     });
-    browser.permissions.onRemoved.addListener((permissions) => { providers.revokePermissions(); ai.discard(); safely(access.revoked(permissions.origins ?? [])); });
-    browser.runtime.onStartup.addListener(() => { initialize(); safely(access.event(null, 'restart')); });
+    browser.permissions.onRemoved.addListener((permissions) => { providers.revokePermissions(); ai.discard(); safely(ready.then(() => access.revoked(permissions.origins ?? []))); });
+    browser.runtime.onStartup.addListener(() => { initialize(); ai.discard(); safely(ready.then(async () => { await (await store()).recover(autofill.owner, true); await access.event(null, 'restart'); })); });
     browser.runtime.onInstalled.addListener(initialize);
     initialize();
   },

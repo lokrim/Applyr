@@ -10,6 +10,7 @@ import { ProviderService } from '../../src/providers/service';
 import { ProviderStorage } from '../../src/providers/storage';
 import { defaultConfig, type Provider } from '../../src/providers/contracts';
 import { selectContext, evidenceIndex, safeAiField } from '../../src/ai/context';
+import { createCoordinator } from '../../src/runtime/coordinator';
 import { AiService, aiHandler } from '../../src/ai/service';
 import { validateProposals, outputSchema } from '../../src/ai/validation';
 import type { TaskContext, TaskSelection, ReviewBatch } from '../../src/ai/contracts';
@@ -56,7 +57,7 @@ async function setup(fields = [field()], provider: Provider = 'openai', candidat
   const service = new AiService(async () => db, providers, autofill);
   const prepare = () => service.execute({ channel: 'ai', schemaVersion: 1, requestId: uuid(), type: 'PREPARE', provider, inspection: structuredClone(inspection), inputVersion: input.version, selections, roleExcerpt: 'A role building tools.' });
   const decide = (batch: ReviewBatch, action: 'approve' | 'reject' = 'approve', factsReviewed = true, text?: string) => service.execute({ channel: 'ai', schemaVersion: 1, requestId: uuid(), type: 'DECIDE', batchId: batch.id, decisions: batch.proposals.map((p) => ({ fieldId: p.fieldId, action, factsReviewed, text: text ?? p.text })) });
-  return { inspection, input, context, proposals, service, providers, transport, access, dispatch, prepare, decide, profiles, checkpoints, selections };
+  return { inspection, input, context, proposals, autofill, service, providers, transport, access, dispatch, prepare, decide, profiles, checkpoints, selections };
 }
 
 describe('F11 minimal native AI proposals', () => {
@@ -83,7 +84,7 @@ describe('F11 minimal native AI proposals', () => {
       const s = await setup(undefined, provider);
       const before = await s.checkpoints.read(); s.transport.mockResolvedValue(jsonResponse(reply));
       await expect(s.prepare()).rejects.toMatchObject({ code });
-      expect(s.transport).toHaveBeenCalledOnce(); expect(s.dispatch).not.toHaveBeenCalled(); expect(await s.checkpoints.read()).toEqual(before);
+      expect(s.transport).toHaveBeenCalledOnce(); expect(s.dispatch).not.toHaveBeenCalled(); expect((await s.checkpoints.read())?.autofill).toEqual(before?.autofill); expect((await s.checkpoints.read())?.lifecycle).toBe(before?.lifecycle); expect((await s.checkpoints.read())?.aiRequest?.status).toBe('uncertain');
     });
   }
   it('allows enumerated mapping references/options and inserts only a reviewed choice', async () => {
@@ -187,7 +188,7 @@ describe('F11 minimal native AI proposals', () => {
     const before = await s.checkpoints.read();
     s.transport.mockResolvedValue(jsonResponse(providerRefusal('openai')));
     await expect(s.prepare()).rejects.toMatchObject({ code: 'refusal' });
-    expect(await s.checkpoints.read()).toEqual(before); expect(s.dispatch).toHaveBeenCalledOnce();
+    expect((await s.checkpoints.read())?.autofill).toEqual(before?.autofill); expect((await s.checkpoints.read())?.lifecycle).toBe(before?.lifecycle); expect((await s.checkpoints.read())?.aiRequest?.status).toBe('uncertain'); expect(s.dispatch).toHaveBeenCalledOnce();
     expect(s.transport).toHaveBeenCalledTimes(2);
   });
   it('evidence from a different selected field and invalid user-edited options are rejected locally', async () => {
@@ -206,4 +207,70 @@ describe('F11 minimal native AI proposals', () => {
     s.selections[0]!.evidenceRefs = ['contact.email'];
     expect(() => selectContext(s.inspection, s.input, s.selections, '')).toThrow();
   });
+});
+
+it('F10 durable paid intent survives a new worker as uncertain; old proposals and duplicate decisions cannot write', async () => {
+  const s = await setup(); let release!: () => void; const gate = new Promise<void>((r) => { release = r; });
+  const original = s.transport.getMockImplementation()!;
+  s.transport.mockImplementation(async (url, init) => { await gate; return original(url, init); });
+  const pending = s.prepare(); const rejected = expect(pending).rejects.toThrow();
+  await vi.waitFor(async () => expect((await s.checkpoints.read())?.aiRequest?.status).toBe('pending'));
+  const before = await s.checkpoints.read(); expect(before?.lease).toBeDefined();
+  await s.checkpoints.recover(crypto.randomUUID()); release(); await rejected;
+  expect((await s.checkpoints.read())?.aiRequest?.status).toBe('uncertain'); expect(s.transport).toHaveBeenCalledOnce(); expect(s.dispatch).not.toHaveBeenCalled();
+});
+
+it('F10 cancel aborts a pending candidate call and never accepts its late response', async () => {
+  const s = await setup();
+  s.transport.mockImplementation(async (_url, init) => new Promise((_resolve, reject) => { init.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true }); }));
+  const pending = s.prepare(); const rejected = expect(pending).rejects.toThrow();
+  await vi.waitFor(() => expect(s.transport).toHaveBeenCalledOnce());
+  s.service.discard(); await rejected;
+  expect(s.dispatch).not.toHaveBeenCalled(); expect((await s.checkpoints.read())?.aiRequest?.status).toBe('uncertain');
+});
+
+it('F10 durable approval records decisions before dispatch but worker recovery invalidates unconsumed review', async () => {
+  const s = await setup(), batch = (await s.prepare()).batch!;
+  s.dispatch.mockImplementation(async (command) => {
+    const cp = await s.checkpoints.read(); expect(cp?.approval?.batchId).toBe(batch.id); expect(cp?.approval?.inputVersion).toBe(s.input.version);
+    return { operationId: command.operationId, fieldId: command.fieldId, status: 'accepted', code: 'persisted_valid', selectedBytes: null, siteAcceptance: 'not_applicable' };
+  });
+  await s.decide(batch); expect(s.dispatch).toHaveBeenCalledOnce();
+  const next = (await s.prepare()).batch!;
+  await s.checkpoints.recover(crypto.randomUUID(), true);
+  await expect(s.decide(next)).rejects.toThrow(); expect(s.dispatch).toHaveBeenCalledOnce();
+});
+
+for (const status of [429, 500]) it(`F10 candidate ${status} is a single potentially billed attempt with explicit retry only`, async () => {
+  const s = await setup(); s.transport.mockResolvedValue(jsonResponse({ error: { message: 'temporary' } }, status));
+  await expect(s.prepare()).rejects.toThrow(); expect(s.transport).toHaveBeenCalledOnce();
+  expect((await s.checkpoints.read())?.aiRequest?.status).toBe('uncertain'); expect(s.dispatch).not.toHaveBeenCalled();
+});
+
+it('F10 deleting profile removes durable approved values and invalidates unconsumed review', async () => {
+  const s = await setup(); await s.decide((await s.prepare()).batch!);
+  const batch = (await s.prepare()).batch!; const saved = (await s.profiles.read()).saved!;
+  await s.profiles.deleteDefault(saved.version);
+  const cp = await s.checkpoints.read(); expect(cp?.approval).toBeUndefined(); expect(cp?.autofill?.operations.every((o) => o.recovery === undefined)).toBe(true);
+  expect(cp?.autofill?.operations[0]?.result?.status).toBe('accepted'); await expect(s.decide(batch)).rejects.toThrow(); expect(s.dispatch).toHaveBeenCalledOnce();
+});
+
+it('F10 a duplicated older provider request cannot be replayed after a newer request', async () => {
+  const s = await setup();
+  const request = { channel: 'ai' as const, schemaVersion: 1 as const, requestId: uuid(), type: 'PREPARE' as const, provider: 'openai' as const, inspection: s.inspection, inputVersion: s.input.version, selections: s.selections, roleExcerpt: '' };
+  await s.service.execute(request); await s.prepare();
+  await expect(s.service.execute(request)).rejects.toThrow(); expect(s.transport).toHaveBeenCalledTimes(2);
+  expect((await s.checkpoints.read())?.providerRequests).toHaveLength(2);
+});
+
+for (const type of ['PAUSE_SESSION', 'CANCEL_SESSION'] as const) it(`F10 ${type} wins a pending provider cleanup/revision race`, async () => {
+  const s = await setup(), initial = (await s.checkpoints.read())!;
+  s.transport.mockImplementation(async (_url, init) => new Promise((_r, reject) => { init.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true }); }));
+  const pending = s.prepare(), rejected = expect(pending).rejects.toThrow();
+  await vi.waitFor(() => expect(s.transport).toHaveBeenCalledOnce());
+  const pages = { popup: 'chrome-extension://test/popup.html', session: 'chrome-extension://test/session.html', options: 'chrome-extension://test/options.html' };
+  const coordinator = createCoordinator({ extensionId: 'test', pages, store: async () => s.checkpoints, target: async () => initial.target, now: Date.now, uuid, access: s.access, autofill: s.autofill, discardAi: () => s.service.discard() });
+  const response = await coordinator({ schemaVersion: 1, requestId: uuid(), type, sessionId: initial.id, revision: initial.revision }, { id: 'test', url: pages.session });
+  await rejected; expect(response.ok).toBe(true);
+  const cp = await s.checkpoints.read(); expect(cp?.lifecycle).toBe(type === 'PAUSE_SESSION' ? 'PAUSED' : 'CANCELLED'); expect(cp?.aiRequest?.status).toBe('uncertain'); expect(s.dispatch).not.toHaveBeenCalled();
 });

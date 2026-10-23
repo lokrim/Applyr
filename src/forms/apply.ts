@@ -9,7 +9,7 @@ export async function operateControl(command: ContentOperation): Promise<ActionR
   const scope = globalThis as typeof globalThis & { __applyrInspection?: InspectionState; __applyrOperations?: Agent };
   const agent: Agent = scope.__applyrOperations ??= { cancelled: new Set(), cache: new Map() };
   const state = scope.__applyrInspection;
-  const result = (status: ActionResult['status'], code: ActionResult['code'], selectedBytes: boolean | null = null): ActionResult => ({ operationId: command.operationId, fieldId: command.fieldId, status, code, selectedBytes, siteAcceptance: command.type === 'write' ? 'not_applicable' : code === 'upload_rejected' ? 'rejected' : 'unverified' });
+  const result = (status: ActionResult['status'], code: ActionResult['code'], selectedBytes: boolean | null = null): ActionResult => ({ operationId: command.operationId, fieldId: command.fieldId, status, code, selectedBytes, siteAcceptance: command.type === 'write' || (command.type === 'observe' && command.expected?.kind !== 'file') ? 'not_applicable' : code === 'upload_rejected' ? 'rejected' : 'unverified' });
   const clear = () => { if (agent.transfer) { clearTimeout(agent.transfer.timer); agent.transfer.bytes.fill(0); delete agent.transfer; } };
   const key = JSON.stringify([command.operationId, command.runId, command.fieldId, command.binding, command.precondition, command.type === 'write' ? [command.value, command.eligibilityApproved] : null]);
   if (command.type === 'cancel') {
@@ -24,7 +24,7 @@ export async function operateControl(command: ContentOperation): Promise<ActionR
   if (!state || state.identity !== command.binding.identity || state.document !== command.binding.document || await hash(new TextEncoder().encode(address())) !== command.binding.identity) { clear(); return result('unsupported', 'stale_control'); }
   if (agent.cancelled.has(command.runId)) { clear(); return result('unverified', 'cancelled'); }
   const cached = agent.cache.get(command.operationId);
-  if (cached && command.type !== 'verify') return cached.key === key ? cached.result : result('unsupported', 'transfer_invalid');
+  if (cached && command.type !== 'verify' && command.type !== 'observe') return cached.key === key ? cached.result : result('unsupported', 'transfer_invalid');
   if (command.type === 'chunk') {
     const t = agent.transfer;
     if (!t || t.key !== key || command.offset !== t.offset || !command.bytes.length || command.bytes.length > 65536 || command.bytes.some((b) => !Number.isInteger(b) || b < 0 || b > 255) || t.offset + command.bytes.length > t.bytes.length) { clear(); return result('unsupported', 'transfer_invalid'); }
@@ -43,6 +43,29 @@ export async function operateControl(command: ContentOperation): Promise<ActionR
   };
   const peers = () => e instanceof HTMLInputElement && e.type === 'radio' ? Array.from(state.registry.values()).map((r) => r.deref()).filter((p): p is HTMLInputElement => p instanceof HTMLInputElement && p.type === 'radio' && p.name === e.name && p.form === e.form && p.getRootNode() === e.getRootNode()) : [];
   const rawValue = () => e instanceof HTMLInputElement && e.type === 'file' ? Array.from(e.files ?? []).map((f) => `${f.name}:${f.size}:${f.lastModified}`).join('|') : e instanceof HTMLInputElement && e.type === 'radio' ? JSON.stringify(peers().map((p) => [state.ids.get(p), p.checked])) : e instanceof HTMLInputElement && e.type === 'checkbox' ? String(e.checked) : e.value;
+  if (command.type === 'observe') {
+    // Durable recovery is observation only, independent of the operation cache.
+    if (state.revision !== command.binding.revision || !state.guard?.() || !state.safeRead?.(command.fieldId)) return result('unverified', 'stale_control');
+    const expected = command.expected;
+    if (!expected) return result('unverified', 'unknown_effect');
+    if (expected.kind === 'file') {
+      if (!(e instanceof HTMLInputElement) || e.type !== 'file') return result('unverified', 'stale_control');
+      const files = e.files;
+      const equal = files?.length === 1 && files[0]!.size === expected.size && files[0]!.name === expected.name && await hash(await files[0]!.arrayBuffer()) === expected.digest;
+      if (!e.isConnected || !state.guard?.()) return result('unverified', 'stale_control');
+      return visibleError() ? result('rejected', 'upload_rejected', !!equal) : result('unverified', equal ? 'selected_only' : 'unknown_effect', !!equal);
+    }
+    let equal = false;
+    if (expected.kind === 'text') equal = e.value === expected.text;
+    else if (expected.kind === 'checked' && e instanceof HTMLInputElement && e.type === 'checkbox') equal = e.checked === expected.checked && await opaque(e.value) === expected.optionFingerprint;
+    else if (expected.kind === 'choice') {
+      const selected = e instanceof HTMLSelectElement ? e.selectedOptions[0] : peers().find((p) => p.checked);
+      equal = !!selected && await opaque(selected.value) === expected.optionFingerprint;
+    }
+    if (!e.isConnected || !state.guard?.()) return result('unverified', 'stale_control');
+    if (!equal) return field.current.present ? result('skipped_user_change', 'user_change') : result('unverified', 'unknown_effect');
+    return e.validity.valid && !visibleError() ? result('accepted', 'persisted_valid') : result('rejected', 'site_error');
+  }
   if (command.type === 'verify') {
     // Observation only: never reassign an uncertain file or replay an event.
     if (cached?.key !== key) return result('unverified', 'unknown_effect');

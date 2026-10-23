@@ -40,20 +40,35 @@ export const CheckpointSchema: z.ZodType<SessionCheckpoint> = z.strictObject({
   schemaVersion: z.literal(1),
   id: uuid,
   revision: integer,
-  lifecycle: z.enum(['QUEUED', 'NEEDS_ATTENTION']),
-  phase: z.literal('SETUP'),
+  lifecycle: z.enum(['QUEUED', 'RUNNING', 'NEEDS_ATTENTION', 'PAUSED', 'READY_FOR_REVIEW', 'AUTOFILL_FINISHED', 'CANCELLED', 'FAILED']),
+  phase: z.enum(['SETUP', 'INSPECTING', 'PREPARING', 'FILLING', 'VALIDATING']),
   target: TargetSchema,
   access: AccessSchema.optional(),
   createdAt: integer,
   updatedAt: integer,
   expiresAt: integer,
-  submission: z.strictObject({ status: z.literal('unknown') }),
+  submission: z.strictObject({ status: z.enum(['unknown', 'reported_by_user']), reportedAt: integer.optional(), source: z.literal('user').optional() }).refine((s) => s.status === 'reported_by_user' ? s.reportedAt !== undefined && s.source === 'user' : s.reportedAt === undefined && s.source === undefined),
+  reviewScope: z.enum(['current_step', 'final_review']).optional(), pauseRequested: z.boolean().optional(),
+  recovery: z.strictObject({ reason: z.string().max(80), inspectionRequired: z.boolean(), reattachRequired: z.boolean() }).optional(),
+  lease: z.strictObject({ owner: uuid, token: uuid, application: z.string().max(4096), expiresAt: integer }).optional(),
+  aiRequest: z.strictObject({ id: uuid, status: z.enum(['pending', 'completed', 'uncertain']), inputVersion: uuid }).optional(),
+  providerRequests: z.array(z.strictObject({ id: uuid, status: z.enum(['pending', 'completed', 'uncertain']), inputVersion: uuid })).max(100).optional(),
+  approval: z.strictObject({ batchId: uuid, inputVersion: uuid, document: uuid, revision: integer, at: integer, decisions: z.array(z.strictObject({ fieldId: uuid, action: z.enum(['approve', 'reject']), text: z.string().max(2048) })).max(8) }).optional(),
   autofill: AutofillSchema.optional(),
-}).refine((record) => record.createdAt <= record.updatedAt && record.updatedAt < record.expiresAt);
+}).refine((record) => record.createdAt <= record.updatedAt && record.updatedAt < record.expiresAt && (record.lifecycle !== 'RUNNING' || record.phase !== 'SETUP'));
 
 const envelope = { schemaVersion: z.literal(1), requestId: uuid };
 const binding = { sessionId: uuid.nullable(), revision: integer.nullable() };
 export const RequestSchema = z.discriminatedUnion('type', [
+  z.strictObject({ ...envelope, type: z.literal('PAUSE_SESSION'), sessionId: uuid, revision: integer }),
+  z.strictObject({ ...envelope, type: z.literal('RESUME_SESSION'), sessionId: uuid, revision: integer }),
+  z.strictObject({ ...envelope, type: z.literal('CANCEL_SESSION'), sessionId: uuid, revision: integer }),
+  z.strictObject({ ...envelope, type: z.literal('FINISH_SESSION'), sessionId: uuid, revision: integer }),
+  z.strictObject({ ...envelope, type: z.literal('REPORT_SUBMISSION'), sessionId: uuid, revision: integer }),
+  z.strictObject({ ...envelope, type: z.literal('FINAL_REVIEW'), sessionId: uuid, revision: integer }),
+
+  z.strictObject({ ...envelope, type: z.literal('REATTACH_SESSION'), sessionId: uuid, revision: integer, tabId: integer }),
+  z.strictObject({ ...envelope, type: z.literal('RESTORE_SESSION'), sessionId: uuid, revision: integer, archivedId: uuid }),
   z.strictObject({ ...envelope, type: z.literal('START_AUTOFILL'), sessionId: uuid, revision: integer, runId: uuid, inspection: InspectionSchema, inputVersion: uuid, corrections: z.array(SessionCorrectionSchema).max(100), resume: z.strictObject({ id: uuid, inputVersion: uuid }).nullable() }),
   z.strictObject({ ...envelope, type: z.literal('CANCEL_AUTOFILL'), sessionId: uuid, revision: integer, runId: uuid }),
   z.strictObject({ ...envelope, type: z.literal('GET_STATE'), sessionId: z.null(), revision: z.null() }),

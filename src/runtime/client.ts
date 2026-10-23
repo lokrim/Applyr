@@ -10,7 +10,7 @@ const errors = {
   TAB_UNAVAILABLE: 'The source tab is no longer available. Open the popup from the intended tab.',
   STORAGE_UNAVAILABLE: 'Local recovery storage is unavailable. Check browser storage space and reload.',
   INVALID_URL: 'Use a valid HTTPS application URL without credentials. Browser pages are unsupported.',
-  ACCESS_UNAVAILABLE: 'This page or embedded application cannot be inspected. Invoke applyr on the application itself.',
+  ACCESS_UNAVAILABLE: 'Check session recovery, selected inputs and page access, then reinspect the matching application. Another operation may still be running.',
 } as const;
 
 export async function sendIntent(intent: Intent) {

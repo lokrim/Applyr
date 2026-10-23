@@ -153,3 +153,132 @@ it('cancellation during byte transfer clears it, prevents commit and deletes tem
   expect(types).toContain('cancel'); expect(types).toContain('clear'); expect(types).not.toContain('commit');
   expect((await s.store.read())?.autofill?.status).toBe('cancelled'); expect((await docs.read()).document).toBeNull(); expect((await new ProfileStore(db).read()).snapshot).toBeNull();
 });
+
+it('F10 pause at the first delivered operation persists acceptance and prevents subsequent writes; resume only inspects', async () => {
+  const s = await setup([field(), field({ type: 'tel', label: 'Phone', autocomplete: 'tel' })]);
+  let release!: () => void; const gate = new Promise<void>((r) => { release = r; });
+  s.dispatch.mockImplementation(async (command) => { s.effects.push(command); await gate; return { operationId: command.operationId, fieldId: command.fieldId, status: 'accepted', code: 'persisted_valid', selectedBytes: null, siteAcceptance: 'not_applicable' }; });
+  const running = s.service.start(s.request()); await vi.waitFor(() => expect(s.dispatch).toHaveBeenCalledOnce());
+  const cp = (await s.store.read())!; await s.service.pause(cp.id, cp.revision);
+  expect((await s.store.read())?.pauseRequested).toBe(true);
+  release(); await running;
+  const paused = (await s.store.read())!;
+  expect(paused.lifecycle).toBe('PAUSED'); expect(paused.autofill?.status).toBe('paused');
+  expect(paused.autofill?.operations[0]?.result?.status).toBe('accepted'); expect(s.dispatch).toHaveBeenCalledOnce();
+  const before = vi.mocked(s.access.inspect).mock.calls.length;
+  const resumed = await s.service.resume(paused.id, paused.revision);
+  expect(resumed.lifecycle).toBe('QUEUED'); expect(vi.mocked(s.access.inspect).mock.calls.length).toBeGreaterThan(before); expect(s.dispatch).toHaveBeenCalledOnce();
+});
+
+it('F10 durable lease rejects a second service instance and expires into read-only recovery', async () => {
+  const s = await setup(); let release!: () => void; const gate = new Promise<void>((r) => { release = r; });
+  s.dispatch.mockImplementation(async (command) => { await gate; return { operationId: command.operationId, fieldId: command.fieldId, status: 'accepted', code: 'persisted_valid', selectedBytes: null, siteAcceptance: 'not_applicable' }; });
+  const running = s.service.start(s.request()); await vi.waitFor(() => expect(s.dispatch).toHaveBeenCalledOnce());
+  const second = new AutofillService({ database: async () => db, access: s.access, dispatch: s.dispatch, changed: () => {} });
+  const current = (await s.store.read())!;
+  await expect(second.start({ ...s.request(), revision: current.revision })).rejects.toThrow();
+  await s.store.recover(second.owner);
+  release(); await running;
+  expect(s.dispatch).toHaveBeenCalledOnce();
+  const recovered = (await s.store.read())!; expect(recovered.lifecycle).toBe('NEEDS_ATTENTION');
+  expect(recovered.autofill?.operations[0]?.result?.status).toBe('accepted');
+});
+
+for (const observed of ['accepted', 'skipped_user_change'] as const) it(`F10 intent without result is observed as ${observed} with no write replay`, async () => {
+  const s = await setup(); await s.service.start(s.request());
+  let cp = (await s.store.read())!;
+  cp = { ...cp, revision: cp.revision + 1, lifecycle: 'NEEDS_ATTENTION', recovery: { reason: 'worker_interrupted', inspectionRequired: true, reattachRequired: false }, autofill: { ...cp.autofill!, status: 'interrupted', operations: cp.autofill!.operations.map((o) => ({ ...o, result: null })) } };
+  await s.store.replace(cp, { sessionId: cp.id, revision: cp.revision - 1 });
+  s.dispatch.mockImplementation(async (command) => {
+    expect(command.type).toBe('observe');
+    return { operationId: command.operationId, fieldId: command.fieldId, status: observed, code: observed === 'accepted' ? 'persisted_valid' : 'user_change', selectedBytes: null, siteAcceptance: 'not_applicable' };
+  });
+  const result = await s.service.resume(cp.id, cp.revision);
+  expect(result.autofill?.operations[0]?.result?.status).toBe(observed);
+  expect(s.dispatch.mock.calls.map(([c]) => c.type)).toEqual(['write', 'observe']);
+  await s.service.start({ ...s.request(), revision: result.revision });
+  expect(s.dispatch.mock.calls.map(([c]) => c.type)).toEqual(['write', 'observe']);
+});
+
+it('F10 remounted document keeps an unknown effect and never resolves it against a different field', async () => {
+  const s = await setup(); await s.service.start(s.request());
+  let cp = (await s.store.read())!;
+  cp = { ...cp, revision: cp.revision + 1, lifecycle: 'NEEDS_ATTENTION', autofill: { ...cp.autofill!, status: 'interrupted', operations: cp.autofill!.operations.map((o) => ({ ...o, result: null })) } };
+  await s.store.replace(cp, { sessionId: cp.id, revision: cp.revision - 1 });
+  s.inspection.snapshot.document = uuid(); s.inspection.snapshot.fields[0]!.id = uuid();
+  const resumed = await s.service.resume(cp.id, cp.revision);
+  expect(resumed.autofill?.operations[0]?.result).toMatchObject({ status: 'unverified', code: 'unknown_effect' }); expect(s.dispatch).toHaveBeenCalledOnce();
+});
+
+it('F10 recovery after missing/deleted inputs requires reselection without observation or fallback', async () => {
+  const s = await setup(); await s.service.start(s.request());
+  const cp = (await s.store.read())!; await db.delete('profiles', 'snapshot');
+  await expect(s.service.resume(cp.id, cp.revision)).rejects.toThrow('ACCESS_UNAVAILABLE'); expect(s.dispatch).toHaveBeenCalledOnce();
+});
+
+it('F10 cancel after accepted result cannot revive the session or lose acceptance; temporary recovery values clear', async () => {
+  const s = await setup(); await s.service.start(s.request());
+  const cp = (await s.store.read())!; await s.service.cancel(cp.id, cp.autofill!.id);
+  const cancelled = (await s.store.read())!;
+  expect(cancelled.lifecycle).toBe('CANCELLED'); expect(cancelled.autofill?.operations[0]?.result?.status).toBe('accepted'); expect(cancelled.autofill?.operations[0]?.recovery).toBeUndefined();
+  await expect(s.service.resume(cp.id, cancelled.revision)).rejects.toThrow();
+  await expect(s.service.start({ ...s.request(), revision: cancelled.revision })).rejects.toThrow(); expect(s.dispatch).toHaveBeenCalledOnce();
+});
+
+it('F10 an accepted result arriving after a job switch is merged into its parked ledger exactly once', async () => {
+  const s = await setup(); let release!: () => void; const gate = new Promise<void>((r) => { release = r; });
+  s.dispatch.mockImplementation(async (command) => { await gate; return { operationId: command.operationId, fieldId: command.fieldId, status: 'accepted', code: 'persisted_valid', selectedBytes: null, siteAcceptance: 'not_applicable' }; });
+  const running = s.service.start(s.request()); await vi.waitFor(() => expect(s.dispatch).toHaveBeenCalledOnce());
+  const old = (await s.store.read())!;
+  const next = createCheckpoint({ ...old.target, tabId: 90, identity: other }, uuid(), Date.now());
+  await s.store.replace(next, { sessionId: old.id, revision: old.revision }); release(); await running;
+  const parked = (await s.store.archived()).find((cp) => cp.id === old.id)!;
+  expect(parked.lifecycle).toBe('PAUSED'); const result = parked.autofill!.operations[0]!.result!; expect(result.status).toBe('accepted');
+  await s.store.recordResult(old.id, old.autofill!.id, { ...result, status: 'rejected', code: 'site_error' });
+  expect((await s.store.archived()).find((cp) => cp.id === old.id)?.autofill?.operations[0]?.result).toEqual(result);
+  expect((await s.store.read())?.id).toBe(next.id); expect((await s.store.read())?.autofill).toBeUndefined(); expect(s.dispatch).toHaveBeenCalledOnce();
+});
+
+it('F10 termination after intent but before any page effect inspects the empty control and never blindly replays', async () => {
+  const s = await setup();
+  s.dispatch.mockImplementationOnce(async () => { const cp = (await s.store.read())!; expect(cp.autofill?.operations[0]?.result).toBeNull(); await s.store.recover(uuid()); throw new Error('worker stopped before delivery'); });
+  await s.service.start(s.request()); const cp = (await s.store.read())!;
+  expect(s.effects).toEqual([]); expect(cp.autofill?.operations[0]?.result?.code).toBe('unknown_effect');
+  const recovery = new AutofillService({ database: async () => db, access: s.access, dispatch: s.dispatch, changed: () => {} });
+  s.dispatch.mockImplementation(async (command) => { expect(command.type).toBe('observe'); return { operationId: command.operationId, fieldId: command.fieldId, status: 'unverified', code: 'unknown_effect', selectedBytes: null, siteAcceptance: 'not_applicable' }; });
+  const resumed = await recovery.resume(cp.id, cp.revision);
+  await recovery.start({ ...s.request(), revision: resumed.revision });
+  expect(s.dispatch.mock.calls.map(([c]) => c.type)).toEqual(['write', 'observe']); expect(s.effects).toEqual([]);
+});
+
+for (const stop of ['PAUSE_SESSION', 'CANCEL_SESSION'] as const) it(`F10 ${stop} tolerates newer progress revisions in the same session`, async () => {
+  const s = await setup(); const start = s.request();
+  let release!: () => void; const gate = new Promise<void>((r) => { release = r; });
+  s.dispatch.mockImplementation(async (command) => { if (command.type === 'write') await gate; return { operationId: command.operationId, fieldId: command.fieldId, status: 'accepted', code: 'persisted_valid', selectedBytes: null, siteAcceptance: 'not_applicable' }; });
+  const pending = s.service.start(start); await vi.waitFor(() => expect(s.dispatch).toHaveBeenCalledOnce());
+  const pages = { popup: 'chrome-extension://test/popup.html', session: 'chrome-extension://test/session.html', options: 'chrome-extension://test/options.html' };
+  const coordinator = createCoordinator({ extensionId: 'test', pages, store: async () => s.store, target: async () => (await s.store.read())!.target, now: Date.now, uuid, access: s.access, autofill: s.service });
+  const response = await coordinator({ schemaVersion: 1, requestId: uuid(), type: stop, sessionId: start.sessionId, revision: start.revision }, { id: 'test', url: pages.session });
+  expect(response.ok).toBe(true); release(); await pending;
+  expect((await s.store.read())?.lifecycle).toBe(stop === 'PAUSE_SESSION' ? 'PAUSED' : 'CANCELLED');
+  expect(s.dispatch.mock.calls.filter(([c]) => c.type === 'write')).toHaveLength(1);
+});
+
+it('F10 a relabelled control cannot satisfy a prior intent during recovery', async () => {
+  const s = await setup(); await s.service.start(s.request()); let cp = (await s.store.read())!;
+  cp = { ...cp, revision: cp.revision + 1, lifecycle: 'NEEDS_ATTENTION', autofill: { ...cp.autofill!, status: 'interrupted', operations: cp.autofill!.operations.map((o) => ({ ...o, result: null })) } };
+  await s.store.replace(cp, { sessionId: cp.id, revision: cp.revision - 1 });
+  s.inspection.snapshot.fields[0]!.label = 'Unrelated replacement question';
+  const resumed = await s.service.resume(cp.id, cp.revision);
+  expect(resumed.autofill?.operations[0]?.result?.code).toBe('unknown_effect'); expect(s.dispatch).toHaveBeenCalledOnce();
+});
+
+it('F10 cancellation after reinspection cannot append a new intent or recovery value', async () => {
+  const s = await setup(); let calls = 0;
+  vi.mocked(s.access.inspect).mockImplementation(async () => {
+    if (++calls === 2) { const cp = (await s.store.read())!; await s.service.cancel(cp.id, cp.autofill!.id); }
+    return { checkpoint: (await s.store.read())!, inspection: structuredClone(s.inspection) };
+  });
+  await s.service.start(s.request()); const cp = await s.store.read();
+  expect(cp?.lifecycle).toBe('CANCELLED'); expect(cp?.autofill?.operations).toEqual([]); expect(s.dispatch).not.toHaveBeenCalled();
+});

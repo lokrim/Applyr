@@ -33,14 +33,14 @@ export function FormInspection({ checkpoint }: { checkpoint: SessionCheckpoint }
     {snapshot && <div data-testid="form-inspection">
       <p role="status">Snapshot {snapshot.revision}: {snapshot.status.replaceAll('_', ' ')}. {snapshot.fields.length} fields. This is a point-in-time observation; reinspect after changing the page.</p>
       <p className="muted">Frame {inspection.frameId} · Document {snapshot.document}</p>
-      {snapshot.status === 'stable' && snapshot.selectedForm && <DryRunPreview inspection={inspection} inputVersion={inspectedInputVersion} />}
+      {snapshot.status === 'stable' && snapshot.selectedForm && <DryRunPreview inspection={inspection} inputVersion={inspectedInputVersion} checkpoint={checkpoint} />}
       {snapshot.status === 'selection_required' && <fieldset><legend>Select the application form to inspect</legend>{snapshot.forms.map((form, index) => <button key={form.id} onClick={() => void inspect({ formId: form.id, document: snapshot.document, revision: snapshot.revision })}>{index + 1}. {form.label} ({form.fieldCount} controls)</button>)}</fieldset>}
       {snapshot.status === 'unstable' && <p>Changes exceeded the inspection bound. Wait for the page or complete this area manually, then reinspect.</p>}
       {snapshot.status === 'stale_selection' && <p>The form selection changed. Reinspect and select the form again.</p>}
       <ol>{snapshot.fields.map((field) => <li key={field.id} className="inspected-field">
         <strong>{field.label || 'Missing label'}</strong> · {field.type} · {field.required ? 'Required' : 'Optional'}
         {!!field.context.length && <p>{field.context.join(' / ')}</p>}
-        <p>{field.category.replaceAll('_', ' ')}{field.filePurpose ? ` · ${field.filePurpose.replaceAll('_', ' ')}` : ''} · {field.executable ? 'Eligible control; writes unavailable' : 'Manual review required'}</p>
+        <p>{field.category.replaceAll('_', ' ')}{field.filePurpose ? ` · ${field.filePurpose.replaceAll('_', ' ')}` : ''} · {field.executable ? 'Eligible control; review proposal before Start' : 'Manual review required'}</p>
         <p>{field.current.present ? 'Existing value present' : 'Empty or unchecked'} · {field.validation.flags.join(', ') || (field.validation.valid === false ? 'Invalid' : 'No native validation error')}{field.validation.ariaInvalid || field.validation.errorPresent ? ' · Website reports an error' : ''}</p>
         {!!field.options.length && <p>Options: {field.options.map((o) => `${o.label}${o.disabled ? ' (disabled)' : ''}`).join(', ')}</p>}
         <details><summary>Inspection metadata</summary><p>Field {field.id} · {field.labelSource} · {field.autocomplete || 'No autocomplete'}</p><p>Constraints: {Object.entries(field.constraints).filter(([, v]) => v !== '' && v !== false).map(([k, v]) => `${k}: ${v}`).join(', ') || 'None declared'}</p><p className="target">Fingerprint: {field.current.fingerprint}</p></details>

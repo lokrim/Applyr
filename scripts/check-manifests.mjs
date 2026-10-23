@@ -25,7 +25,7 @@ for (const browser of ['chrome', 'firefox']) {
     assert.equal(manifest.sidebar_action.default_panel, 'session.html');
     assert.equal(manifest.side_panel, undefined);
     assert.equal(manifest.browser_specific_settings.gecko.strict_min_version, '140.0');
-    assert.deepEqual(manifest.browser_specific_settings.gecko.data_collection_permissions, { required: ['none'] });
+    assert.deepEqual(manifest.browser_specific_settings.gecko.data_collection_permissions, { required: ['personallyIdentifyingInfo'] });
   }
   for (const file of ['background.js', 'popup.html', 'session.html', 'options.html']) await access(`${root}/${file}`);
   console.log(`${browser}: MV3, browser-specific entries, packaged UI and permission assertions passed`);

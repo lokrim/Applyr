@@ -101,9 +101,9 @@ export function DocumentWorkspace({ surface, sessionId, onMutation }: { surface:
         })}>Save selected resume as default</button> : <button disabled={busy || !draft || !sessionId || currentSessionId.current !== sessionId} onClick={() => void run(async () => {
           if (!draft || !sessionId) return;
           await (await store()).start(sessionId, draft.selection, state.session?.version ?? null, reuse ? { expectedId: state.saved?.id ?? null } : undefined);
-          clearDraft(); await reload(); notifyDocumentChange(); await onMutation(); setNotice('Resume bound to this local session. Reinspection is required before future page actions. Page access, inspection and autofill have not started.');
+          clearDraft(); await onMutation(); await reload(); notifyDocumentChange(); setNotice('Resume bound to this local session. Reinspect fields before including it with Start Autofill. This action has not uploaded it.');
         })}>{state.session ? 'Replace session resume' : 'Start local document session'}</button>}
-        <p className="muted">This starts local input recovery only. Page access and Start Autofill are not implemented yet. No website receives a document.</p>
+        <p className="muted">This starts local input recovery only. To send this resume, inspect fields, explicitly include it and use Start Autofill. The website may begin uploading before submission.</p>
       </>}
       {terminal && <p>For another run, explicitly capture a new setup checkpoint from the intended source tab.</p>}
       <button className="text-button" disabled={busy} onClick={() => void run(async () => { await reload(); setNotice('Document state reloaded. Your pending selection stays in this view.'); })}>Reload document state</button>

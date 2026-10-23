@@ -155,7 +155,7 @@ export function createDryRun(inspection: Inspection, input: MappingInput, correc
   const binding = previewBinding(inspection, input);
   // Unknown, conflicting or structurally invalid inputs never get partial guesses.
   const validInput = ProfileSchema.safeParse(input.document.data).success;
-  const meanings = inspection.snapshot.fields.map((f) => fieldMeaning(f, input.document));
+  const meanings = inspection.snapshot.fields.map((f) => fieldMeaning(f.radioGroup?.label ? { ...f, label: f.radioGroup.label, context: [] } : f, input.document));
   const items = inspection.snapshot.fields.map((field, index): PreviewItem => {
     const meaning = meanings[index];
     const item: PreviewItem = { fieldId: field.id, label: field.label || 'Missing label', required: field.required, state: 'review', reason: '', sourcePath: meaning?.path ?? null, eligibility: !!meaning?.eligibility, correctable: false, inputKind: meaning?.kind ?? 'text' };
@@ -168,8 +168,9 @@ export function createDryRun(inspection: Inspection, input: MappingInput, correc
     if (manual && !meaning?.eligibility) return stop(field.type === 'file' ? 'unsupported' : 'review', manual);
     if (!meaning) return stop('review', 'Unknown or ambiguous meaning, name, record selection or metadata conflict. Enter this answer on the page.');
     if (!field.executable && !meaning.eligibility) return stop('unsupported', 'This control requires manual interaction.');
-    if (field.type === 'radio') return stop('unsupported', 'Radio group identity is not available in this snapshot; choose on the page.');
-    if (meanings.filter((m) => m?.path === meaning.path).length > 1) return stop('review', 'Multiple fields refer to the same fact. Duplicate or repeated-record selection requires review.');
+    if (field.type === 'radio' && !field.radioGroup?.label) return stop('unsupported', 'Radio group identity is not available in this snapshot; choose on the page.');
+    if (field.radioGroup && field.radioGroup.primary !== field.id) return stop('skipped', 'This option belongs to the radio group represented by its first control.');
+    if (meanings.filter((m, i) => m?.path === meaning.path && (!field.radioGroup || inspection.snapshot.fields[i]?.radioGroup?.primary !== field.radioGroup.primary || inspection.snapshot.fields[i]?.id === field.id)).length > 1) return stop('review', 'Multiple fields refer to the same fact. Duplicate or repeated-record selection requires review.');
     item.correctable = true;
     if (field.validation.ariaInvalid || field.validation.errorPresent || field.validation.flags.some((flag) => flag !== 'valueMissing')) return stop('review', 'The website reports a validation error. Resolve it on the page, then reinspect.');
     const rawCorrections = corrections.filter((c) => c.fieldId === field.id);

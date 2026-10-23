@@ -145,9 +145,11 @@ export function ProfileWorkspace({ surface, sessionId, onFreeze }: { surface: 'o
             {surface === 'session' && <>
               <button disabled={busy || !sessionId || initialSession.current !== sessionId} onClick={() => void run(async () => {
                 const selection = source === 'saved' && selectedSavedVersion ? { source: 'saved' as const, savedVersion: selectedSavedVersion } : { source: 'replacement' as const, document: valid };
-                setSnapshot(await (await profileStore()).freeze(sessionId!, selection, snapshot?.version ?? null));
-                notifyProfileChange();
-                await onFreeze(); setNotice('Profile frozen for this session only. Reinspection is required before future page actions.');
+                const next = await (await profileStore()).freeze(sessionId!, selection, snapshot?.version ?? null);
+                // The frozen indicator must not precede the parent checkpoint
+                // refresh: its revision change invalidates an old inspection.
+                await onFreeze(); setSnapshot(next); notifyProfileChange();
+                setNotice('Profile frozen for this session only. Reinspection is required before future page actions.');
               })}>{snapshot ? 'Refresh frozen profile' : 'Freeze profile for this session'}</button>
               <button className="secondary" disabled={busy} onClick={() => setProposal(true)}>Propose profile update</button>
             </>}

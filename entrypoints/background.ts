@@ -12,6 +12,9 @@ import { probePage } from '../src/browser/probe';
 import { inspectForm } from '../src/forms/inspect';
 import { PageAccessService } from '../src/runtime/page-access';
 import { restrictPreferenceAccess } from '../src/browser/surfaces';
+import { AutofillService } from '../src/runtime/autofill';
+import { operateControl } from '../src/forms/apply';
+import { ContentOperationSchema } from '../src/forms/operations';
 
 export default defineBackground({
   persistent: false,
@@ -43,6 +46,16 @@ export default defineBackground({
         return found ? { result: found.result, documentId: found.documentId } : null;
       },
     });
+    const changed = () => { const channel = new BroadcastChannel('applyr-target'); channel.postMessage('changed'); channel.close(); };
+    const autofill = new AutofillService({ database: getDatabase, access, changed,
+      dispatch: async (command) => {
+        ContentOperationSchema.parse(command);
+        const b = command.binding;
+        const results = await browser.scripting.executeScript({ target: { tabId: b.tabId, frameIds: [b.frameId] }, world: 'ISOLATED', func: operateControl, args: [command] });
+        const found = results.filter((r) => r.frameId === b.frameId && (!b.browserDocumentId || r.documentId === b.browserDocumentId));
+        return found.length === 1 ? found[0]!.result : null;
+      },
+    });
     const handle = createCoordinator({
       extensionId: browser.runtime.id,
       pages: {
@@ -50,7 +63,7 @@ export default defineBackground({
         session: browser.runtime.getURL(branding.pages.session),
         options: browser.runtime.getURL(branding.pages.options),
       },
-      store, target, access,
+      store, target, access, autofill,
       now: Date.now,
       uuid: () => crypto.randomUUID(),
     });

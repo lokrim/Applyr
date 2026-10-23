@@ -2,6 +2,8 @@ import { z } from 'zod';
 import type { SessionCheckpoint } from '../domain/session';
 import { parseApplicationUrl, sanitizedUrl } from '../browser/addresses';
 import { InspectionSchema, SelectionSchema } from '../forms/schema';
+import { AutofillSchema } from '../forms/operations';
+import { SessionCorrectionSchema } from '../mapping/schema';
 
 const integer = z.number().int().nonnegative();
 const uuid = z.string().uuid();
@@ -46,11 +48,14 @@ export const CheckpointSchema: z.ZodType<SessionCheckpoint> = z.strictObject({
   updatedAt: integer,
   expiresAt: integer,
   submission: z.strictObject({ status: z.literal('unknown') }),
+  autofill: AutofillSchema.optional(),
 }).refine((record) => record.createdAt <= record.updatedAt && record.updatedAt < record.expiresAt);
 
 const envelope = { schemaVersion: z.literal(1), requestId: uuid };
 const binding = { sessionId: uuid.nullable(), revision: integer.nullable() };
 export const RequestSchema = z.discriminatedUnion('type', [
+  z.strictObject({ ...envelope, type: z.literal('START_AUTOFILL'), sessionId: uuid, revision: integer, runId: uuid, inspection: InspectionSchema, inputVersion: uuid, corrections: z.array(SessionCorrectionSchema).max(100), resume: z.strictObject({ id: uuid, inputVersion: uuid }).nullable() }),
+  z.strictObject({ ...envelope, type: z.literal('CANCEL_AUTOFILL'), sessionId: uuid, revision: integer, runId: uuid }),
   z.strictObject({ ...envelope, type: z.literal('GET_STATE'), sessionId: z.null(), revision: z.null() }),
   z.strictObject({ ...envelope, ...binding, type: z.literal('CAPTURE_TARGET'), tabId: integer }),
   z.strictObject({ ...envelope, type: z.literal('FORGET_CHECKPOINT'), sessionId: uuid, revision: integer }),

@@ -20,6 +20,14 @@ describe('saved default / frozen session isolation in versioned IndexedDB', () =
   beforeEach(async () => { now = 1000; name = `profiles-${crypto.randomUUID()}`; database = await openDatabase(name); profiles = new ProfileStore(database, () => now); await new CheckpointStore(database, () => now).replace(createCheckpoint(target, id, now), empty); });
   afterEach(async () => { database.close(); await deleteDB(name); });
 
+  it('uses one clock instant for frozenAt and expiry even when the clock advances between reads', async () => {
+    let ticks = 0;
+    const advancing = new ProfileStore(database, () => now + ticks++);
+    const frozen = await advancing.freeze(id, { source: 'replacement', document: document('Clock boundary') }, null);
+    expect(frozen.expiresAt - frozen.frozenAt).toBe(RECOVERY_TTL_MS);
+    expect((await advancing.read()).snapshot?.version).toBe(frozen.version);
+  });
+
   it('explicitly migrates an existing v1 database while preserving its checkpoint', async () => {
     database.close(); await deleteDB(name);
     const previous = await openDB(name, 1, { upgrade(db) { db.createObjectStore('checkpoints'); } });

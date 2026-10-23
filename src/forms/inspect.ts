@@ -1,4 +1,9 @@
 import type { FormSelection, FormSnapshot } from './schema';
+export interface InspectionState {
+  identity: string; document: string; salt: string; revision: number; signature: string; candidates: string;
+  ids: WeakMap<Element, string>; registry: Map<string, WeakRef<Element>>; forms: Set<string>; busy: boolean;
+  snapshot?: FormSnapshot; guard?: () => boolean; safeRead?: (id: string) => boolean;
+}
 
 // Serialized into the authorized ISOLATED world; all runtime helpers stay inside.
 // No page bridge, writes, credential reads, provider access or persistent observer.
@@ -7,8 +12,7 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
   const hash = async (value: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))), (v) => v.toString(16).padStart(2, '0')).join('');
   const address = () => location.href.replace(/^(https?:\/\/)[^/@]+:[^/@]+@/, '$1');
   if (await hash(address()) !== expectedIdentity) return null;
-  type State = { identity: string; document: string; salt: string; revision: number; signature: string; candidates: string; ids: WeakMap<Element, string>; registry: Map<string, WeakRef<Element>>; forms: Set<string>; busy: boolean };
-  const scope = globalThis as typeof globalThis & { __applyrInspection?: State };
+  const scope = globalThis as typeof globalThis & { __applyrInspection?: InspectionState };
   if (!scope.__applyrInspection || scope.__applyrInspection.identity !== expectedIdentity) scope.__applyrInspection = { identity: expectedIdentity, document: crypto.randomUUID(), salt: crypto.randomUUID(), revision: 0, signature: '', candidates: '', ids: new WeakMap(), registry: new Map(), forms: new Set(), busy: false };
   const state = scope.__applyrInspection;
   if (state.busy) return null;
@@ -52,6 +56,17 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
   const job = /\b(apply|application|candidate|job|position|career|resume|résumé)\b/i;
   const excluded = /newsletter|subscribe|search|payment|checkout|sign.?in|log.?in/i;
   const auth = /password|passwd|passcode|one.?time|\botp\b|\busername\b|verification.?code|security.?code|auth.?token|session.?token|credit.?card|card.?number|\bcc-[\w-]+\b|\bcvc\b|\bcvv\b|\bpin\b/i;
+  const metadataToken = (e: Element) => {
+    const ancestry: string[] = [];
+    for (let p = parent(e); p; p = parent(p)) ancestry.push(`${identify(p)}:${p.matches('fieldset') ? nodeText(Array.from(p.children).find((c) => c.matches('legend')) ?? null) : ''}`);
+    return JSON.stringify([e.isConnected, visible(e), name(e), ancestry, e.localName, e.getAttribute('type'), e.getAttribute('name'), e.id, e.getAttribute('autocomplete')]);
+  };
+  const token = (e: Element) => {
+    const c = e as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+    return JSON.stringify([metadataToken(e), Array.from(e.attributes).map((a) => [a.name, a.value]),
+      c instanceof HTMLSelectElement ? Array.from(c.options).map((o) => [o.value, o.label, o.disabled, o.selected, !!o.closest('optgroup[disabled]')]) : c instanceof HTMLInputElement && c.type === 'file' ? Array.from(c.files ?? []).map((f) => [f.name, f.size, f.lastModified]) : c.value,
+      c instanceof HTMLInputElement && ['radio', 'checkbox'].includes(c.type) ? c.checked : null]);
+  };
   let mutations = 0, scans = 0;
   const observers: MutationObserver[] = [];
   const observed = new Set<Node>();
@@ -127,16 +142,22 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
             : ['select', 'radio'].includes(type) ? 'choice' : type === 'checkbox' ? 'preference' : type === 'textarea' ? 'long_answer' : 'short_answer';
         if (!named.label || named.labelSource === 'placeholder') category = 'missing_semantics';
         const filePurpose = type !== 'file' ? null : /resume|résumé|\bcv\b/i.test(semantics) ? 'resume' : /cover/i.test(semantics) ? 'cover_letter' : /portfolio/i.test(semantics) ? 'portfolio' : /transcript/i.test(semantics) ? 'transcript' : 'unknown';
-        const value = type === 'file' ? Array.from((control as HTMLInputElement).files ?? []).map((f) => `${f.name}:${f.size}:${f.lastModified}`).join('|') : ['checkbox', 'radio'].includes(type) ? String((control as HTMLInputElement).checked) : control instanceof HTMLSelectElement && control.multiple ? Array.from(control.selectedOptions).map((o) => o.value).join('\u0000') : control.value;
+        let radioPeers = type === 'radio' && (control as HTMLInputElement).name ? controls.filter((c) => c instanceof HTMLInputElement && c.type === 'radio' && c.name === (control as HTMLInputElement).name && c.form === (control as HTMLInputElement).form && c.getRootNode() === control.getRootNode()) as HTMLInputElement[] : [];
+        // Hidden/uninspected group members may already hold an answer. Inspect
+        // their membership metadata only and abstain without reading checked.
+        if (radioPeers.length && Array.from((control.getRootNode() as Document | ShadowRoot).querySelectorAll('input[type="radio"]')).filter((c) => (c as HTMLInputElement).name === (control as HTMLInputElement).name && (c as HTMLInputElement).form === (control as HTMLInputElement).form).length !== radioPeers.length) radioPeers = [];
+        const value = type === 'file' ? Array.from((control as HTMLInputElement).files ?? []).map((f) => `${f.name}:${f.size}:${f.lastModified}`).join('|') : type === 'radio' ? JSON.stringify(radioPeers.map((c) => [identify(c), c.checked])) : type === 'checkbox' ? String((control as HTMLInputElement).checked) : control instanceof HTMLSelectElement && control.multiple ? Array.from(control.selectedOptions).map((o) => o.value).join('\u0000') : control.value;
         const flags = (['valueMissing', 'typeMismatch', 'patternMismatch', 'tooLong', 'tooShort', 'rangeUnderflow', 'rangeOverflow', 'stepMismatch', 'badInput', 'customError'] as const).filter((key) => control.validity[key]);
         const optionElements = control instanceof HTMLSelectElement ? Array.from(control.options) : [];
         if (optionElements.length > 100) limited = true;
         const options = await Promise.all(optionElements.slice(0, 100).map(async (o) => ({ label: clean(o.label), fingerprint: await opaque(o.value), disabled: o.disabled || !!o.closest('optgroup[disabled]') })));
-        if (['radio', 'checkbox'].includes(type)) options.push({ label: named.label, fingerprint: await opaque((control as HTMLInputElement).value), disabled: false });
+        if (type === 'checkbox') options.push({ label: named.label, fingerprint: await opaque((control as HTMLInputElement).value), disabled: false });
+        if (type === 'radio') for (const peer of radioPeers) options.push({ label: name(peer).label, fingerprint: await opaque(peer.value), disabled: peer.disabled });
         fields.push({ id: identify(e), ...named, context, type: type as FormSnapshot['fields'][number]['type'], autocomplete: clean(e.getAttribute('autocomplete')), required: control.required || e.getAttribute('aria-required') === 'true', category, filePurpose,
-          executable: !['declaration', 'sensitive', 'missing_semantics'].includes(category) && (type !== 'file' || filePurpose === 'resume'),
+          executable: !['declaration', 'sensitive', 'missing_semantics'].includes(category) && (type !== 'file' || filePurpose === 'resume') && (type !== 'radio' || radioPeers.length > 0),
           constraints: { min: clean(e.getAttribute('min')), max: clean(e.getAttribute('max')), step: clean(e.getAttribute('step')), minLength: clean(e.getAttribute('minlength')), maxLength: clean(e.getAttribute('maxlength')), pattern: clean(e.getAttribute('pattern')), accept: clean(e.getAttribute('accept')), multiple: e.hasAttribute('multiple') }, options,
-          current: { fingerprint: await opaque(value), present: ['checkbox', 'radio'].includes(type) ? (control as HTMLInputElement).checked : value.length > 0 || (control instanceof HTMLSelectElement && Array.from(control.selectedOptions).some((o) => !!o.label.trim() && !/^(?:choose(?: an option)?|select(?: an option)?|please (?:choose|select)(?: an option)?|--+|\s*)[.\s-]*$/i.test(o.label))) },
+          ...(radioPeers.length ? { radioGroup: { primary: identify(radioPeers[0]!), label: context.at(-1) ?? '', present: radioPeers.some((c) => c.checked) } } : {}),
+          current: { fingerprint: await opaque(value), present: type === 'radio' ? radioPeers.some((c) => c.checked) : type === 'checkbox' ? (control as HTMLInputElement).checked : value.length > 0 || (control instanceof HTMLSelectElement && Array.from(control.selectedOptions).some((o) => !!o.label.trim() && !/^(?:choose(?: an option)?|select(?: an option)?|please (?:choose|select)(?: an option)?|--+|\s*)[.\s-]*$/i.test(o.label))) },
           // Do not call checkValidity/reportValidity (they dispatch events), or read
           // validationMessage/error text: those can echo credentials or answers.
           validation: { valid: control.willValidate ? control.validity.valid : null, flags, ariaInvalid: e.getAttribute('aria-invalid') === 'true', errorPresent: !!refs(e, 'aria-errormessage') },
@@ -170,6 +191,17 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
       const id = state.ids.get(e);
       if (id && result.fields.some((f) => f.id === id) && e.isConnected) state.registry.set(id, new WeakRef(e));
     }
-    return { ...result, revision: state.revision, observation: { mutations, scans, bounded: true } };
+    const guards = currentControls.filter((e) => result.fields.some((f) => f.id === state.ids.get(e))).map((e) => ({ id: state.ids.get(e), ref: new WeakRef(e), metadata: metadataToken(e), token: token(e) }));
+    const roots = [...observed].map((r) => new WeakRef(r as Document | ShadowRoot));
+    // Metadata only for excluded controls: detects a newly visible auth gate or
+    // a new field without ever reading its answer, hidden token or file bytes.
+    const structure = () => JSON.stringify(roots.map((r) => Array.from(r.deref()?.querySelectorAll('input,select,textarea,form,fieldset,legend') ?? []).slice(0, 3000).map((e) => [identify(e), metadataToken(e), e.matches('legend') ? nodeText(e) : ''])));
+    const originalStructure = structure();
+    state.guard = () => structure() === originalStructure && guards.every((g) => { const e = g.ref.deref(); return !!e && token(e) === g.token; });
+    // Post-render reads must also abstain if a formerly safe control becomes a
+    // password/OTP or changes meaning. This check never reads an answer.
+    state.safeRead = (id) => { const g = guards.find((g) => g.id === id), e = g?.ref.deref(); return !!e && metadataToken(e) === g?.metadata; };
+    state.snapshot = { ...result, revision: state.revision, observation: { mutations, scans, bounded: true } };
+    return state.snapshot;
   } finally { for (const observer of observers) observer.disconnect(); state.busy = false; }
 }

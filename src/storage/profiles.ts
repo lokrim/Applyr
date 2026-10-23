@@ -69,9 +69,10 @@ export class ProfileStore {
     if (!checkpoint.success || checkpoint.data.id !== sessionId || checkpoint.data.expiresAt <= this.now() || (active?.version ?? null) !== expectedSnapshot) { await tx.done; throw new ProfileStateError(); }
     const saved = SavedSchema.safeParse(await profiles.get('default'));
     if (selection.source === 'saved' && (!saved.success || saved.data.version !== selection.savedVersion)) { await tx.done; throw new ProfileStateError(); }
+    const frozenAt = this.now();
     const next: ProfileSnapshot = {
       schemaVersion: 1, version: this.uuid(), sessionId, source: selection.source, savedVersion: selection.source === 'saved' ? selection.savedVersion : null,
-      document: replacement ?? (saved.success ? saved.data.document : undefined)!, frozenAt: this.now(), expiresAt: this.now() + RECOVERY_TTL_MS, requiresReinspection: true,
+      document: replacement ?? (saved.success ? saved.data.document : undefined)!, frozenAt, expiresAt: frozenAt + RECOVERY_TTL_MS, requiresReinspection: true,
     };
     // Explicit activity renews the checkpoint too; simply viewing state never does.
     await tx.objectStore('checkpoints').put({ ...checkpoint.data, revision: checkpoint.data.revision + 1, updatedAt: this.now(), expiresAt: next.expiresAt }, 'current');

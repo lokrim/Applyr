@@ -41,8 +41,8 @@ export default defineConfig({
             gecko: {
               id: branding.firefoxId,
               strict_min_version: '140.0',
-              // No data leaves the prompt-01 shell. Audit as features introduce transmissions.
-              data_collection_permissions: { required: ['none'] },
+              // Core filling transmits the user-selected identity/contact/resume to the bound site.
+              data_collection_permissions: { required: ['personallyIdentifyingInfo'] },
             },
           },
         }

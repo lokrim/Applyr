@@ -34,6 +34,7 @@ export interface SessionCheckpoint {
   updatedAt: number;
   expiresAt: number;
   submission: { status: 'unknown' };
+  autofill?: import('../forms/operations').Autofill;
 }
 
 export const RECOVERY_TTL_MS = 7 * 24 * 60 * 60 * 1000;

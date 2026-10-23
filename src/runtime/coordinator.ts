@@ -4,6 +4,7 @@ import { RequestSchema, type Response } from './schemas';
 import { trustedPage, type Sender } from '../security/sender';
 import { CheckpointStore, StaleCheckpointError } from '../storage/checkpoints';
 import { initialAccess, type PageAccessService } from './page-access';
+import type { AutofillService } from './autofill';
 
 export interface CoordinatorDependencies {
   extensionId: string;
@@ -13,6 +14,7 @@ export interface CoordinatorDependencies {
   now: () => number;
   uuid: () => string;
   access?: PageAccessService;
+  autofill?: AutofillService;
 }
 
 export function createCoordinator(dependencies: CoordinatorDependencies) {
@@ -29,6 +31,12 @@ export function createCoordinator(dependencies: CoordinatorDependencies) {
       const store = await dependencies.store();
       let checkpoint: SessionCheckpoint | null = null;
       switch (message.type) {
+        case 'START_AUTOFILL':
+          if (!dependencies.autofill) return fail('ACCESS_UNAVAILABLE');
+          checkpoint = await dependencies.autofill.start(message); break;
+        case 'CANCEL_AUTOFILL':
+          if (!dependencies.autofill) return fail('ACCESS_UNAVAILABLE');
+          checkpoint = await dependencies.autofill.cancel(message.sessionId, message.runId); break;
         case 'INSPECT_FORM': {
           if (!dependencies.access) return fail('ACCESS_UNAVAILABLE');
           const result = await dependencies.access.inspect(message, message.frameOrigin, message.frameIdentity, message.selection);

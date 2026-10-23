@@ -8,9 +8,13 @@ import { changedProfilePaths } from '../profile/assertions';
 import { exportProfile } from '../profile/markdown';
 import type { ProfileDocument } from '../profile/schema';
 import { notifyProfileChange, onProfileChange, onProfileDeletion } from '../browser/profile-events';
+import type { SessionCheckpoint } from '../domain/session';
+import { DocumentStore } from '../storage/documents';
+import type { DocumentRef } from '../domain/document';
+import { sendRequest } from '../runtime/client';
 
 const store = async () => new ProfileStore(await getDatabase());
-export function DryRunPreview({ inspection, inputVersion }: { inspection: Inspection; inputVersion: string | null }) {
+export function DryRunPreview({ inspection, inputVersion, checkpoint }: { inspection: Inspection; inputVersion: string | null; checkpoint: SessionCheckpoint }) {
   const [snapshot, setSnapshot] = useState<ProfileSnapshot | null>(null);
   const [saved, setSaved] = useState<SavedProfile | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -36,17 +40,22 @@ export function DryRunPreview({ inspection, inputVersion }: { inspection: Inspec
   }, [snapshot]);
   return <section className="dry-run" aria-labelledby="dry-run-heading">
     <h3 id="dry-run-heading">Dry-run mapping preview</h3>
-    <p>Preview only. Nothing has been filled or verified on the website. No provider requests. Submission stays manual. This does not mean the application is complete.</p>
-    {!loaded ? <p role="status">Loading frozen input…</p> : snapshot && snapshot.sessionId === inspection.sessionId ? <FrozenPreview key={snapshot.version} input={snapshot} inspection={inspection} saved={saved} onSaved={setSaved} /> : <p>Freeze a reviewed profile for this session in Candidate profile, then inspect fields again. Saved defaults are never borrowed into a missing or replacement input.</p>}
+    <p>Preview only. This preview does not fill or verify website answers. No provider requests. Submission stays manual. This does not mean the application is complete.</p>
+    {!loaded ? <p role="status">Loading frozen input…</p> : snapshot && snapshot.sessionId === inspection.sessionId ? <FrozenPreview key={snapshot.version} checkpoint={checkpoint} input={snapshot} inspection={inspection} saved={saved} onSaved={setSaved} /> : <p>Freeze a reviewed profile for this session in Candidate profile, then inspect fields again. Saved defaults are never borrowed into a missing or replacement input.</p>}
   </section>;
 }
 
-function FrozenPreview({ input, inspection, saved, onSaved }: { input: MappingInput; inspection: Inspection; saved: SavedProfile | null; onSaved: (value: SavedProfile) => void }) {
+function FrozenPreview({ input, inspection, saved, onSaved, checkpoint }: { input: MappingInput; inspection: Inspection; saved: SavedProfile | null; onSaved: (value: SavedProfile) => void; checkpoint: SessionCheckpoint }) {
   const [corrections, setCorrections] = useState<SessionCorrection[]>([]);
   const [update, setUpdate] = useState<{ document: ProfileDocument; base: SavedProfile | null; path: string } | null>(null);
   const [reviewed, setReviewed] = useState(false);
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [resume, setResume] = useState<DocumentRef | null>(null);
+  const [upload, setUpload] = useState(false);
+  const [runId, setRunId] = useState<string | null>(null);
+  const [started, setStarted] = useState(false);
+  useEffect(() => { void getDatabase().then((db) => new DocumentStore(db).read()).then((s) => setResume(s.document?.sessionId === checkpoint.id ? s.document : null)); }, [checkpoint.id]);
   const preview = createDryRun(inspection, input, corrections);
   const { counts } = preview;
   return <div data-testid="dry-run-preview">
@@ -54,6 +63,20 @@ function FrozenPreview({ input, inspection, saved, onSaved }: { input: MappingIn
     <p>Corrections stay in this view for this session and inspection only; closing or reinspecting clears them. Saved-default edits affect future sessions. Refreshing the frozen input requires reinspection and new confirmations.</p>
     <p role="status" data-testid="mapping-counts">{counts.inspected} inspected · {counts.proposed} proposed · {counts.skipped} skipped · {counts.missing} missing answers · {counts.review} need review · {counts.unsupported} unsupported fields · {counts.unsupportedAreas} unsupported areas</p>
     <p>{counts.requiredUnresolved} required fields remain unverified or unresolved. Proposed values are not accepted website answers.</p>
+    <div className="proposal">
+      <h4>Deterministic autofill</h4>
+      <p>Start permits the displayed deterministic proposals on this bound form. The website may autosave values and uploads before submission. Recovery details expire with this session within seven days. Consent stays on the website; eligibility needs the explicit session confirmation below. You use Next and submit yourself.</p>
+      {resume ? <><p>Selected session resume: {resume.filename} · {resume.size} bytes · input {resume.inputVersion}</p><label className="check-label"><input type="checkbox" checked={upload} disabled={!!runId || started} onChange={(e) => setUpload(e.target.checked)} />Include this resume in a uniquely identified native resume field</label></> : <p>No session resume included. Start a local document session first to include a PDF.</p>}
+      <button disabled={!!runId || started || checkpoint.autofill?.status === 'running' || checkpoint.autofill?.status === 'cancelled' || (!counts.proposed && !upload)} onClick={() => {
+        const id = crypto.randomUUID(); setRunId(id); setStarted(true); setNotice('Filling permitted fields and checking current-step validation…');
+        void sendRequest({ type: 'START_AUTOFILL', sessionId: checkpoint.id, revision: checkpoint.revision, runId: id, inspection, inputVersion: input.version, corrections, resume: upload && resume ? { id: resume.id, inputVersion: resume.inputVersion } : null })
+          .then(() => setNotice('Current-step results saved. Review on the website; use Next and submit yourself.'))
+          .catch((e: unknown) => setNotice(e instanceof Error ? e.message : 'Autofill interrupted. Reinspect before any new action.')).finally(() => setRunId(null));
+      }}>Start Autofill</button>
+      {runId && <button className="secondary" onClick={() => {
+        void sendRequest({ type: 'CANCEL_AUTOFILL', sessionId: checkpoint.id, revision: checkpoint.revision, runId }).then(() => setNotice('Cancelled. Further writes stopped. Existing page values and uploads are not rolled back.')).catch(() => setNotice('Cancellation could not be confirmed. Check saved progress.'));
+      }}>Cancel autofill</button>}
+    </div>
     <ol className="mapping-items">{preview.items.map((item) => <li key={item.fieldId} data-testid="mapping-item" data-state={item.state} className="inspected-field">
       <strong>{item.label}</strong> · {item.required ? 'Required' : 'Optional'} · <span>{item.state.replaceAll('_', ' ')}</span>
       <p>{item.reason}</p>

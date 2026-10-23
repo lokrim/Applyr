@@ -130,7 +130,7 @@ export function App({ surface }: { surface: Surface }) {
           })}>Forget setup checkpoint</button>
         </section>}
       </>}
-      <footer><p>{branding.copy.manual}</p><p>Local only · No analytics · No form actions</p></footer>
+      <footer><p>{branding.copy.manual}</p><p>Local inputs · No analytics · Manual submission</p></footer>
     </main>
   );
 }

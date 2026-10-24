@@ -18,6 +18,7 @@ export interface PageAccess {
   classification: PageClassification;
   reason: 'unprobed' | 'application' | 'listing' | 'login_challenge' | 'irrelevant' | 'uncertain' | 'restricted' | 'permission' | 'frame_permission' | 'frame_unavailable' | 'closed' | 'navigation' | 'reload' | 'restart';
   frames: FrameCandidate[];
+  challenge?: 'login' | 'otp' | 'captcha' | 'authentication';
   documentId?: string;
   inspectedAt?: number;
 }
@@ -42,6 +43,7 @@ export interface SessionCheckpoint {
   providerRequests?: NonNullable<SessionCheckpoint['aiRequest']>[];
   approval?: { batchId: string; inputVersion: string; document: string; revision: number; at: number; decisions: { fieldId: string; action: 'approve' | 'reject'; text: string }[] };
   autofill?: import('../forms/operations').Autofill;
+  attention?: import('../attention/schema').Attention;
 }
 
 export const RECOVERY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -100,5 +102,6 @@ export function transition(s: SessionCheckpoint, event: SessionEvent, now: numbe
   }
   if (['INTERRUPT', 'BOUNDARY', 'CANCEL', 'FAIL', 'FINISH'].includes(event.type)) next.providerRequests = s.providerRequests?.map((r) => r.status === 'pending' ? { ...r, status: 'uncertain' } : r);
   if (['CANCEL', 'FINISH'].includes(event.type) && next.autofill) next.autofill = { ...next.autofill, operations: next.autofill.operations.map((op) => ({ ...op, recovery: undefined })) };
+  if (['CANCEL', 'FINISH'].includes(event.type) && next.attention) next.attention = { ...next.attention, items: next.attention.items.map((i) => ({ ...i, correction: undefined })) };
   return next;
 }

@@ -92,3 +92,14 @@ footer p { font-size: 11px; margin: 4px 0; }
 .ai-review button { margin: 8px 8px 0 0; }
 .ai-review ul { padding-left: 20px; font-size: 12px; }
 .ai-review code { overflow-wrap: anywhere; }
+
+.attention-queue { overflow-wrap: anywhere; }
+.attention-queue ol { padding-left: 22px; }
+.attention-queue li { border-top: 1px solid #dce2d8; padding: 14px 0; }
+.attention-queue h3 { font-size: 14px; }
+.attention-queue fieldset { min-width: 0; border: 1px solid #b9cbb4; border-radius: 6px; padding: 12px; }
+.attention-queue label { display: block; font-size: 13px; margin: 8px 0; }
+.attention-queue input:not([type=checkbox]), .attention-queue select { width: 100%; min-width: 0; border: 1px solid #9daea1; border-radius: 5px; padding: 9px; background: white; color: #20352d; font: inherit; }
+.attention-queue .check-label { display: flex; align-items: flex-start; gap: 8px; }
+.attention-queue :is(input, select, summary):focus-visible { outline: 2px solid #b16421; outline-offset: 3px; }
+.attention-queue pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; font-size: 12px; }

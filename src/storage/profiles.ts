@@ -94,6 +94,7 @@ export class ProfileStore {
       const cp = parsed.data;
       const next = terminal(cp) ? { ...cp, revision: cp.revision + 1, updatedAt: this.now() } : transition(cp, { type: 'INTERRUPT', reason: 'input_deleted' }, this.now());
       next.approval = undefined;
+      next.attention = undefined;
       if (next.autofill) next.autofill = { ...next.autofill, status: next.autofill.status === 'running' ? 'interrupted' : next.autofill.status, operations: next.autofill.operations.map((op) => ({ ...op, recovery: undefined })) };
       await checkpoints.put(next, key);
     }

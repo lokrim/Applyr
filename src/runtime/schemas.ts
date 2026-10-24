@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AttentionSchema, AttentionAnswerSchema } from '../attention/schema';
 import type { SessionCheckpoint } from '../domain/session';
 import { parseApplicationUrl, sanitizedUrl } from '../browser/addresses';
 import { InspectionSchema, SelectionSchema } from '../forms/schema';
@@ -26,12 +27,13 @@ export const FrameSchema = z.strictObject({ url: z.string().max(4096), origin, i
   try { const url = parseApplicationUrl(frame.url, true); return url.origin === frame.origin && sanitizedUrl(url) === frame.url; } catch { return false; }
 });
 export const ProbeSchema = z.strictObject({
+  challenge: z.enum(['login', 'otp', 'captcha', 'authentication']).optional(),
   classification: z.enum(['application', 'listing', 'login_challenge', 'irrelevant', 'restricted', 'uncertain']),
   identity: z.string().regex(/^[a-f0-9]{64}$/), role: z.string().max(180).nullable(), company: z.string().max(180).nullable(), frames: z.array(FrameSchema).max(4),
 });
 export const AccessSchema = z.strictObject({
   status: z.enum(['unprobed', 'ready', 'needs_attention']),
-  classification: ProbeSchema.shape.classification,
+  classification: ProbeSchema.shape.classification, challenge: ProbeSchema.shape.challenge,
   reason: z.enum(['unprobed', 'application', 'listing', 'login_challenge', 'irrelevant', 'uncertain', 'restricted', 'permission', 'frame_permission', 'frame_unavailable', 'closed', 'navigation', 'reload', 'restart']),
   frames: z.array(FrameSchema).max(4), documentId: z.string().max(180).optional(), inspectedAt: integer.optional(),
 });
@@ -54,12 +56,15 @@ export const CheckpointSchema: z.ZodType<SessionCheckpoint> = z.strictObject({
   aiRequest: z.strictObject({ id: uuid, status: z.enum(['pending', 'completed', 'uncertain']), inputVersion: uuid }).optional(),
   providerRequests: z.array(z.strictObject({ id: uuid, status: z.enum(['pending', 'completed', 'uncertain']), inputVersion: uuid })).max(100).optional(),
   approval: z.strictObject({ batchId: uuid, inputVersion: uuid, document: uuid, revision: integer, at: integer, decisions: z.array(z.strictObject({ fieldId: uuid, action: z.enum(['approve', 'reject']), text: z.string().max(2048) })).max(8) }).optional(),
-  autofill: AutofillSchema.optional(),
+  autofill: AutofillSchema.optional(), attention: AttentionSchema.optional(),
 }).refine((record) => record.createdAt <= record.updatedAt && record.updatedAt < record.expiresAt && (record.lifecycle !== 'RUNNING' || record.phase !== 'SETUP'));
 
 const envelope = { schemaVersion: z.literal(1), requestId: uuid };
 const binding = { sessionId: uuid.nullable(), revision: integer.nullable() };
 export const RequestSchema = z.discriminatedUnion('type', [
+  z.strictObject({ ...envelope, type: z.literal('ATTENTION_ANSWERS'), sessionId: uuid, revision: integer, answers: z.array(AttentionAnswerSchema).min(1).max(100) }),
+  z.strictObject({ ...envelope, type: z.literal('REINSPECT_ATTENTION'), sessionId: uuid, revision: integer, itemId: uuid.optional() }),
+  z.strictObject({ ...envelope, type: z.literal('SHOW_ATTENTION'), sessionId: uuid, revision: integer, itemId: uuid.optional() }),
   z.strictObject({ ...envelope, type: z.literal('PAUSE_SESSION'), sessionId: uuid, revision: integer }),
   z.strictObject({ ...envelope, type: z.literal('RESUME_SESSION'), sessionId: uuid, revision: integer }),
   z.strictObject({ ...envelope, type: z.literal('CANCEL_SESSION'), sessionId: uuid, revision: integer }),

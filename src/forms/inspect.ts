@@ -17,6 +17,7 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
   const state = scope.__applyrInspection;
   if (state.busy) return null;
   state.busy = true;
+  (scope as typeof scope & { __applyrMarkers?: { clear: () => void } }).__applyrMarkers?.clear();
   // Drop strong references immediately; only this inspection can rebuild them.
   state.registry.clear();
   const clean = (value: string | null | undefined) => (value ?? '')
@@ -112,7 +113,14 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
     const add = (code: FormSnapshot['unsupported'][number]['code'], label: string) => { if (unsupported.length < 99) unsupported.push({ code, label: clean(label) }); else limited = true; };
     if (!forms.length) add('no_relevant_form', 'No relevant application form found.');
     for (const frame of elements.filter((e) => e.matches('iframe') && visible(e) && job.test(`${e.getAttribute('title')} ${e.getAttribute('src')}`)).slice(0, 4)) add('frame_requires_inspection', clean(frame.getAttribute('title')) || 'Application frame requires separate authorization and inspection.');
-    const gated = selected && controls.some((c) => owner(c) === selected && (c.matches('input[type="password"]') || auth.test(`${metadata(c)} ${name(c).label} ${c.getAttribute('autocomplete') ?? ''}`)));
+    const challenge = elements.some((e) => visible(e) && /captcha|recaptcha|hcaptcha|security.challenge/i.test(`${e.id} ${e.getAttribute('class') ?? ''} ${e.getAttribute('title') ?? ''} ${e.getAttribute('src') ?? ''}`));
+    const gateControls = selected ? controls.filter((c) => owner(c) === selected) : [];
+    const otp = gateControls.some((c) => /one.?time|\botp\b|verification.?code/i.test(`${metadata(c)} ${name(c).label} ${c.getAttribute('autocomplete') ?? ''}`));
+    const login = gateControls.some((c) => c.matches('input[type="password"]'));
+    if (challenge) add('captcha', 'Complete the challenge on the original page, then reinspect.');
+    if (otp) add('otp', 'Complete code verification on the original page, then reinspect.');
+    else if (login) add('login', 'Sign in on the original page, then reinspect.');
+    const gated = challenge || selected && controls.some((c) => owner(c) === selected && (c.matches('input[type="password"]') || auth.test(`${metadata(c)} ${name(c).label} ${c.getAttribute('autocomplete') ?? ''}`)));
     if (gated) add('authentication', 'Complete authentication or payment gates manually, then reinspect. No control values read from this form.');
     if (selected && !gated) {
       for (const e of elements) {

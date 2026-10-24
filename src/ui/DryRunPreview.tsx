@@ -1,3 +1,4 @@
+import { usableCorrections } from '../attention/queue';
 import { AiReview } from './AiReview';
 import { useEffect, useState } from 'react';
 import type { Inspection } from '../forms/schema';
@@ -57,11 +58,13 @@ function FrozenPreview({ input, inspection, saved, onSaved, checkpoint }: { inpu
   const [runId, setRunId] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
   useEffect(() => { void getDatabase().then((db) => new DocumentStore(db).read()).then((s) => setResume(s.document?.sessionId === checkpoint.id ? s.document : null)); }, [checkpoint.id]);
-  const preview = createDryRun(inspection, input, corrections);
+  const persisted = usableCorrections(checkpoint, inspection, input);
+  const combined = [...persisted.filter((c) => !corrections.some((x) => x.fieldId === c.fieldId)), ...corrections];
+  const preview = createDryRun(inspection, input, combined);
   const { counts } = preview;
   return <div data-testid="dry-run-preview">
     <p className="target" data-testid="mapping-input">Frozen {input.source} input {input.version}. Snapshot {preview.binding.revision}, frame {preview.binding.frameId}.</p>
-    <p>Corrections stay in this view for this session and inspection only; closing or reinspecting clears them. Saved-default edits affect future sessions. Refreshing the frozen input requires reinspection and new confirmations.</p>
+    <p>The attention queue saves reviewed batch answers for this application only. Local preview edits below stay in this view; use the queue to retain them across closing or recovery. Saved-default edits affect future sessions. Refreshing the frozen input requires reinspection and new confirmations.</p>
     <p role="status" data-testid="mapping-counts">{counts.inspected} inspected · {counts.proposed} proposed · {counts.skipped} skipped · {counts.missing} missing answers · {counts.review} need review · {counts.unsupported} unsupported fields · {counts.unsupportedAreas} unsupported areas</p>
     <p>{counts.requiredUnresolved} required fields remain unverified or unresolved. Proposed values are not accepted website answers.</p>
     <div className="proposal">
@@ -70,7 +73,7 @@ function FrozenPreview({ input, inspection, saved, onSaved, checkpoint }: { inpu
       {resume ? <><p>Selected session resume: {resume.filename} · {resume.size} bytes · input {resume.inputVersion}</p><label className="check-label"><input type="checkbox" checked={upload} disabled={!!runId || started} onChange={(e) => setUpload(e.target.checked)} />Include this resume in a uniquely identified native resume field</label></> : <p>No session resume included. Start a local document session first to include a PDF.</p>}
       <button disabled={!!runId || started || checkpoint.autofill?.status === 'running' || checkpoint.autofill?.status === 'cancelled' || checkpoint.lifecycle === 'PAUSED' || ['CANCELLED', 'AUTOFILL_FINISHED', 'FAILED'].includes(checkpoint.lifecycle) || checkpoint.recovery?.inspectionRequired || checkpoint.recovery?.reattachRequired || (!counts.proposed && !upload)} onClick={() => {
         const id = crypto.randomUUID(); setRunId(id); setStarted(true); setNotice('Filling permitted fields and checking current-step validation…');
-        void readCheckpoint().then((latest) => { if (latest?.id !== checkpoint.id) throw new Error('Session changed. Reinspect before Start.'); return sendRequest({ type: 'START_AUTOFILL', sessionId: checkpoint.id, revision: latest.revision, runId: id, inspection, inputVersion: input.version, corrections, resume: upload && resume ? { id: resume.id, inputVersion: resume.inputVersion } : null }); })
+        void readCheckpoint().then((latest) => { if (latest?.id !== checkpoint.id) throw new Error('Session changed. Reinspect before Start.'); return sendRequest({ type: 'START_AUTOFILL', sessionId: checkpoint.id, revision: latest.revision, runId: id, inspection, inputVersion: input.version, corrections: combined, resume: upload && resume ? { id: resume.id, inputVersion: resume.inputVersion } : null }); })
           .then(() => setNotice('Current-step results saved. Review on the website; use Next and submit yourself.'))
           .catch((e: unknown) => setNotice(e instanceof Error ? e.message : 'Autofill interrupted. Reinspect before any new action.')).finally(() => setRunId(null));
       }}>Start Autofill</button>

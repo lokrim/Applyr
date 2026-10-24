@@ -1,3 +1,4 @@
+import { pending } from '../attention/queue';
 import { useEffect, useState } from 'react';
 import { browser } from 'wxt/browser';
 import { terminal, type SessionCheckpoint } from '../domain/session';
@@ -46,7 +47,7 @@ export function SessionControls({ checkpoint: cp, onChange }: { checkpoint: Sess
     </div>
     <p>Submission: {cp.submission.status === 'reported_by_user' ? 'reported by you; not independently confirmed' : 'unknown'}. You control Next and submission on the website.</p>
     <p>Pause stops at a safe boundary. Cancel stops future work; already delivered values, uploads and provider requests cannot be recalled.</p>
-    {!!archived.length && <details><summary>Other saved sessions</summary>{archived.map((old) => <p key={old.id}>{old.target.role ?? old.target.origin} · {old.lifecycle.toLowerCase()} · {old.autofill?.operations.filter((o) => o.result?.status === 'accepted').length ?? 0} accepted <button disabled={busy || terminal(old)} onClick={() => void run(() => sendIntent({ type: 'RESTORE_SESSION', sessionId: cp.id, revision: cp.revision, archivedId: old.id }))}>Recover saved session</button></p>)}</details>}
+    {!!archived.length && <details><summary>Other saved sessions</summary>{archived.map((old) => <p key={old.id}>{old.target.role ?? old.target.origin} · {old.lifecycle.toLowerCase()} · {old.autofill?.operations.filter((o) => o.result?.status === 'accepted').length ?? 0} accepted · {old.attention?.items.filter(pending).length ?? 0} attention items <button disabled={busy || terminal(old)} onClick={() => void run(() => sendIntent({ type: 'RESTORE_SESSION', sessionId: cp.id, revision: cp.revision, archivedId: old.id }))}>Recover saved session</button></p>)}</details>}
     {error && <p role="alert">{error}</p>}
   </section>;
 }

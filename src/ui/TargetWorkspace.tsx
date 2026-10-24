@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { browser } from 'wxt/browser';
 import type { SessionCheckpoint } from '../domain/session';
 import { parseApplicationUrl } from '../browser/addresses';
 import { requestPageOrigin } from '../browser/page-permissions';
@@ -66,7 +65,7 @@ export function TargetWorkspace({ checkpoint, onChange }: { checkpoint: SessionC
           void run(async () => { if (await request) await inspect(); else setNotice('Permission denied. Invoke applyr on the application itself or complete it manually.'); });
         }}>Grant {checkpoint.target.origin}</button>}
         <button className="secondary" disabled={busy || checkpoint.access?.reason === 'closed' || checkpoint.access?.reason === 'restart'} onClick={() => void run(async () => {
-          await browser.tabs.update(checkpoint.target.tabId, { active: true }); await browser.windows.update(checkpoint.target.windowId, { focused: true });
+          await sendIntent({ type: 'SHOW_ATTENTION', sessionId: checkpoint.id, revision: checkpoint.revision });
         })}>Return to application</button>
       </div>
       {checkpoint.access?.frames.map((frame) => <div className="frame-access" key={frame.identity}>
@@ -80,7 +79,7 @@ export function TargetWorkspace({ checkpoint, onChange }: { checkpoint: SessionC
         <button className="secondary" disabled={busy} onClick={() => setUrl(frame.url)}>Use embedded URL</button>
       </div>)}
       <AutofillResults checkpoint={checkpoint} />
-      <FormInspection key={`${checkpoint.id}:${checkpoint.revision}`} checkpoint={checkpoint} />
+      <FormInspection key={`${checkpoint.id}:${checkpoint.target.identity}:${checkpoint.access?.reason}:${checkpoint.recovery?.inspectionRequired ?? false}:${checkpoint.lifecycle === 'CANCELLED' || checkpoint.lifecycle === 'AUTOFILL_FINISHED'}`} checkpoint={checkpoint} />
     </>}
     <form onSubmit={(event) => {
       event.preventDefault();

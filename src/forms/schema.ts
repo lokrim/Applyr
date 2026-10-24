@@ -22,7 +22,7 @@ export const FormSnapshotSchema = z.strictObject({
     radioGroup: z.strictObject({ primary: id, label: text, present: z.boolean() }).optional(),
     validation: z.strictObject({ valid: z.boolean().nullable(), flags: z.array(z.enum(['valueMissing', 'typeMismatch', 'patternMismatch', 'tooLong', 'tooShort', 'rangeUnderflow', 'rangeOverflow', 'stepMismatch', 'badInput', 'customError'])).max(10), ariaInvalid: z.boolean(), errorPresent: z.boolean() }),
   })).max(100),
-  unsupported: z.array(z.strictObject({ code: z.enum(['no_relevant_form', 'frame_requires_inspection', 'opaque_custom_element', 'custom_control', 'canvas', 'rich_text', 'locked_control', 'limit', 'authentication']), label: text })).max(100),
+  unsupported: z.array(z.strictObject({ code: z.enum(['no_relevant_form', 'frame_requires_inspection', 'opaque_custom_element', 'custom_control', 'canvas', 'rich_text', 'locked_control', 'limit', 'authentication', 'login', 'otp', 'captcha']), label: text })).max(100),
   observation: z.strictObject({ mutations: z.number().int().nonnegative(), scans: z.number().int().nonnegative(), bounded: z.literal(true) }),
 }).refine((snapshot) => {
   const formIds = new Set(snapshot.forms.map((form) => form.id));

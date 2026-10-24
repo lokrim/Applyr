@@ -37,8 +37,8 @@ export class PageAccessService {
     const blocked = access.status === 'needs_attention' && !terminal(checkpoint);
     const next: SessionCheckpoint = { ...(blocked ? transition(checkpoint, { type: 'INTERRUPT', reason: access.reason, reattach: ['restart', 'navigation', 'closed'].includes(access.reason) }, this.deps.now()) : { ...checkpoint, revision: checkpoint.revision + 1, updatedAt: this.deps.now() }), target, access };
     if (blocked && next.autofill?.status === 'running') next.autofill = { ...next.autofill, status: 'interrupted' };
-    await (await this.deps.store()).replace(next, { sessionId: checkpoint.id, revision: checkpoint.revision });
-    this.deps.changed(); return next;
+    const saved = await (await this.deps.store()).replace(next, { sessionId: checkpoint.id, revision: checkpoint.revision });
+    this.deps.changed(); return saved!;
   }
 
   private attention(checkpoint: SessionCheckpoint, reason: PageAccess['reason']) {
@@ -87,7 +87,7 @@ export class PageAccessService {
         } catch { return []; }
       });
       const ready = result.classification === 'application';
-      return this.write(checkpoint, { status: ready ? 'ready' : 'needs_attention', classification: result.classification, reason: frames.some((f) => f.origin !== target.origin) ? 'frame_permission' : result.classification, frames: frame ? checkpoint.access?.frames ?? [] : frames, inspectedAt: this.deps.now(), ...(injected?.documentId ? { documentId: injected.documentId } : {}) }, {
+      return this.write(checkpoint, { status: ready ? 'ready' : 'needs_attention', classification: result.classification, challenge: result.challenge, reason: frames.some((f) => f.origin !== target.origin) ? 'frame_permission' : result.classification, frames: frame ? checkpoint.access?.frames ?? [] : frames, inspectedAt: this.deps.now(), ...(injected?.documentId ? { documentId: injected.documentId } : {}) }, {
         ...target, title: target.title ?? observed.title ?? null, role: target.role ?? displayText(result.role), company: target.company ?? displayText(result.company),
       });
     } catch (error) {

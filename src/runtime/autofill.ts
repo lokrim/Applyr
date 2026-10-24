@@ -18,6 +18,7 @@ export class AutofillService {
   private active: { id: string; sessionId: string; cancelled: boolean; command?: ContentOperation } | null = null;
   constructor(private readonly deps: {
     database: () => Promise<IDBPDatabase<ApplyrDatabase>>; access: PageAccessService;
+    observed?: (cp: SessionCheckpoint, inspection: Inspection) => Promise<SessionCheckpoint>;
     dispatch: (command: ContentOperation) => Promise<unknown>; changed: () => void;
   }) {}
   private async checkpoint() { return new CheckpointStore(await this.deps.database()).read(); }
@@ -108,7 +109,7 @@ export class AutofillService {
       operations.push({ ...op, result });
     }
     const next = { ...transition(cp, { type: 'RESUME' }, Date.now()), recovery: { reason: 'inspected', inspectionRequired: false, reattachRequired: false }, autofill: cp.autofill ? { ...cp.autofill, status: 'interrupted' as const, operations } : undefined };
-    await store.replace(next, { sessionId, revision }); this.deps.changed(); return next;
+    await store.replace(next, { sessionId, revision }); this.deps.changed(); return this.deps.observed ? this.deps.observed(next, fresh) : next;
   }
   async releaseInputs(sessionId: string, status: 'cancelled' | 'finished') {
     const db = await this.deps.database();
@@ -209,7 +210,8 @@ export class AutofillService {
       }
       if (!active.cancelled) {
         inspection = await inspect(true);
-        await this.save(cp.id, active.id, (s) => ({ ...s, status: 'review', requiredUnresolved: inspection.snapshot.fields.filter((f) => f.required && (!f.current.present || f.validation.valid === false || f.validation.ariaInvalid || f.validation.errorPresent)).length }));
+        const reviewed = await this.save(cp.id, active.id, (s) => ({ ...s, status: 'review', requiredUnresolved: inspection.snapshot.fields.filter((f) => f.required && (!f.current.present || f.validation.valid === false || f.validation.ariaInvalid || f.validation.errorPresent)).length }));
+        await this.deps.observed?.(reviewed, inspection);
       }
     } catch (e) {
       if (started && !active.cancelled) await this.interrupted(original.sessionId, active.id);
@@ -365,7 +367,8 @@ export class AutofillService {
           const last = ledger.findLast((o) => o.fieldId === f.id);
           return f.required && (!f.current.present || f.validation.valid === false || f.validation.ariaInvalid || f.validation.errorPresent || (last && last.result?.status !== 'accepted') || f.type === 'file');
         });
-        await this.save(message.sessionId, message.runId, (s) => ({ ...s, status: 'review', requiredUnresolved: remaining.length, unsupported: inspection.snapshot.unsupported.length }));
+        const reviewed = await this.save(message.sessionId, message.runId, (s) => ({ ...s, status: 'review', requiredUnresolved: remaining.length, unsupported: inspection.snapshot.unsupported.length }));
+        await this.deps.observed?.(reviewed, inspection);
       }
       return this.checkpoint();
     } catch (e) {

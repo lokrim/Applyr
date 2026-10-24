@@ -6,6 +6,7 @@ export interface ProbeResult {
   role: string | null;
   company: string | null;
   frames: FrameCandidate[];
+  challenge?: 'login' | 'otp' | 'captcha' | 'authentication';
 }
 
 // Serialized by scripting.executeScript into an ISOLATED world. Keep all runtime
@@ -40,6 +41,7 @@ export async function probePage(expectedIdentity: string, frameUrl: string | nul
       if (frames.length < 4 && !frames.some((f) => f.url === url.href)) frames.push({ url: url.href, origin: url.origin, identity: frameIdentity });
     } catch { /* Unsupported embeds require manual use of the site. */ }
   }
+  let challenge: ProbeResult['challenge'] = /captcha|security challenge/.test(context) ? 'captcha' : /one[ -]?time (?:code|password)/.test(context) ? 'otp' : /sign[ -]?in|log[ -]?in/.test(context) ? 'login' : undefined;
   let login = /\b(sign[ -]?in|log[ -]?in|captcha|verify (?:you|your identity)|security challenge|one[ -]?time (?:code|password))\b/.test(context);
   let relevant = 0;
   // Scope controls to relevant forms; unrelated newsletter/search/payment forms
@@ -49,7 +51,8 @@ export async function probePage(expectedIdentity: string, frameUrl: string | nul
     const meta = `${form.getAttribute('aria-label') ?? ''} ${form.id} ${form.getAttribute('name') ?? ''} ${form.getAttribute('action') ?? ''}`.toLowerCase();
     if (/newsletter|subscribe|search|payment|checkout/.test(meta)) continue;
     // Only recognize types/autocomplete, not names/labels/values, for authentication.
-    if (Array.from(form.querySelectorAll('input[type="password"],input[autocomplete="one-time-code"]')).some(visible)) login = true;
+    if (Array.from(form.querySelectorAll('input[autocomplete="one-time-code"]')).some(visible)) { login = true; challenge = 'otp'; }
+    else if (Array.from(form.querySelectorAll('input[type="password"]')).some(visible)) { login = true; challenge = 'login'; }
     if (!job.test(meta) && !job.test(context)) continue;
     for (const control of Array.from(form.querySelectorAll('input:not([type="hidden"]):not([type="password"]):not([autocomplete="one-time-code"]),select,textarea')).slice(0, 100)) {
       if (!visible(control) || control.matches(':disabled,[readonly]')) continue;
@@ -64,5 +67,5 @@ export async function probePage(expectedIdentity: string, frameUrl: string | nul
   const classification: PageClassification = login ? 'login_challenge' : relevant >= 2 ? 'application' : listing ? 'listing' : job.test(context) || frames.length || !context.trim() ? 'uncertain' : 'irrelevant';
   const heading = headings.find((h) => !/^(apply|application|careers|jobs|job application)$/i.test(h));
   const parts = (heading ?? '').split(/\s+(?:at|@)\s+/i);
-  return { classification, identity, role: job.test(context) && parts.length === 2 ? text(parts[0]) : null, company: job.test(context) && parts.length === 2 ? text(parts[1]) : null, frames: login ? [] : frames };
+  return { classification, identity, role: job.test(context) && parts.length === 2 ? text(parts[0]) : null, company: job.test(context) && parts.length === 2 ? text(parts[1]) : null, frames: login ? [] : frames, ...(login ? { challenge: challenge ?? 'authentication' } : {}) };
 }

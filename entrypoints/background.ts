@@ -1,3 +1,7 @@
+import { AttentionService } from '../src/attention/service';
+import { AttentionAlerts, parseAlerts, openAttentionAlert } from '../src/browser/attention-alerts';
+import { markAttention } from '../src/forms/markers';
+import { terminal, type SessionCheckpoint } from '../src/domain/session';
 import { defineBackground } from 'wxt/utils/define-background';
 import { browser } from 'wxt/browser';
 import { onProfileDeletion } from '../src/browser/profile-events';
@@ -27,9 +31,23 @@ export default defineBackground({
     const handleProvider = providerHandler(providers, browser.runtime.id, browser.runtime.getURL(branding.pages.options));
     const store = async () => new CheckpointStore(await getDatabase());
     const target = async (tabId: number) => capturedTarget(await browser.tabs.get(tabId), import.meta.env.DEV);
+    let previous: SessionCheckpoint | null = null;
+    const changed = () => {
+      const channel = new BroadcastChannel('applyr-target'); channel.postMessage('changed'); channel.close();
+      void store().then((s) => s.read()).then(async (cp) => {
+        const old = previous; previous = cp;
+        const cleanup = old && (!cp || old.id !== cp.id) ? old : cp && (terminal(cp) || cp.access?.status !== 'ready') ? cp : null;
+        if (cleanup) {
+          const frameIds = [...new Set([0, ...(cleanup.attention?.items.flatMap((i) => i.target ? [i.target.frameId] : []) ?? [])])];
+          for (const frameId of frameIds) await browser.tabs.sendMessage(cleanup.target.tabId, { channel: 'clear-applyr-markers' }, { frameId }).catch(() => {});
+          await browser.scripting.executeScript({ target: { tabId: cleanup.target.tabId, frameIds }, world: 'ISOLATED', func: markAttention, args: [null, [], false] }).catch(() => {});
+        }
+        await alerts?.refresh(cp);
+      }).catch(() => {});
+    };
     const access = new PageAccessService({
       store, target, now: Date.now, uuid: () => crypto.randomUUID(), allowLoopback: import.meta.env.DEV,
-      changed: () => { const channel = new BroadcastChannel('applyr-target'); channel.postMessage('changed'); channel.close(); },
+      changed,
       contains: (origin) => browser.permissions.contains({ origins: [originPattern(origin, import.meta.env.DEV)] }),
       createTab: (url) => browser.tabs.create({ url, active: true }),
       inspect: async (tabId, identity, frame, selection) => {
@@ -52,8 +70,35 @@ export default defineBackground({
         return found ? { result: found.result, documentId: found.documentId } : null;
       },
     });
-    const changed = () => { const channel = new BroadcastChannel('applyr-target'); channel.postMessage('changed'); channel.close(); };
-    const autofill = new AutofillService({ database: getDatabase, access, changed,
+    const attention = new AttentionService({ database: getDatabase, access, changed,
+      mark: async (t, fields, show) => {
+        const results = await browser.scripting.executeScript({ target: { tabId: t.tabId, frameIds: [t.frameId] }, world: 'ISOLATED', func: markAttention, args: [t, fields, show] });
+        return results.length === 1 && (!t.browserDocumentId || results[0]?.documentId === t.browserDocumentId) && results[0]?.result === true;
+      },
+      activate: async (cp) => { await browser.tabs.update(cp.target.tabId, { active: true }); await browser.windows.update(cp.target.windowId, { focused: true }); },
+    });
+    const alerts = new AttentionAlerts({
+      read: async () => parseAlerts((await browser.storage.local.get('attention-alerts'))['attention-alerts']),
+      write: (state) => browser.storage.local.set({ 'attention-alerts': state }),
+      permission: () => browser.permissions.contains({ permissions: ['notifications'] }),
+      badge: async (status) => { await browser.action.setBadgeText({ text: status.text }); await browser.action.setTitle({ title: status.title }); await browser.action.setBadgeBackgroundColor({ color: '#34335c' }); },
+      create: async (id, options) => { if (typeof browser.notifications?.create !== 'function') throw new Error('UNSUPPORTED'); await browser.notifications.create(id, { type: 'basic', iconUrl: browser.runtime.getURL('/icon-48.png'), ...options }); },
+      clear: async (id) => typeof browser.notifications?.clear === 'function' ? browser.notifications.clear(id) : false,
+    });
+    browser.storage.onChanged.addListener((changes, area) => { if (area === 'local' && changes['attention-alerts'] && parseAlerts(changes['attention-alerts'].newValue).enabled !== parseAlerts(changes['attention-alerts'].oldValue).enabled) changed(); });
+    browser.notifications?.onClicked?.addListener((id) => {
+      void ready.then(async () => {
+        const s = await store();
+        const opened = await openAttentionAlert(id, {
+          state: async () => parseAlerts((await browser.storage.local.get('attention-alerts'))['attention-alerts']),
+          current: () => s.read(), archived: () => s.archived(), restore: (sessionId, expected) => s.restore(sessionId, expected),
+          open: async () => { await browser.tabs.create({ url: browser.runtime.getURL(branding.pages.session), active: true }); },
+        });
+        if (!opened) return;
+        await browser.notifications.clear(id).catch(() => false); changed();
+      }).catch(() => {});
+    });
+    const autofill = new AutofillService({ database: getDatabase, access, changed, observed: (cp, inspection) => attention.observe(cp, inspection),
       dispatch: async (command) => {
         ContentOperationSchema.parse(command);
         const b = command.binding;
@@ -72,7 +117,7 @@ export default defineBackground({
         session: browser.runtime.getURL(branding.pages.session),
         options: browser.runtime.getURL(branding.pages.options),
       },
-      store, target, access, autofill, changed, discardAi: () => ai.discard(),
+      store, target, access, autofill, attention, changed, discardAi: () => ai.discard(),
       now: Date.now,
       uuid: () => crypto.randomUUID(),
     });
@@ -84,6 +129,7 @@ export default defineBackground({
       if (restart) await browser.storage.session.set({ 'applyr-session-epoch': crypto.randomUUID() });
       await (await store()).recover(autofill.owner, restart);
       if (restart) await access.event(null, 'restart');
+      changed();
     })();
     void ready.catch(() => { /* Requests report the storage failure. */ });
     // Callback bridge works with Chrome versions that do not support Promise listeners.
@@ -117,7 +163,7 @@ export default defineBackground({
         if (await browser.permissions.contains({ origins: [originPattern(checkpoint.target.origin, import.meta.env.DEV)] })) await access.probe({ sessionId: checkpoint.id, revision: checkpoint.revision });
       }));
     });
-    browser.permissions.onRemoved.addListener((permissions) => { providers.revokePermissions(); ai.discard(); safely(ready.then(() => access.revoked(permissions.origins ?? []))); });
+    browser.permissions.onRemoved.addListener((permissions) => { if (permissions.origins?.length || (permissions as { data_collection?: string[] }).data_collection?.length) { providers.revokePermissions(); ai.discard(); } safely(ready.then(async () => { await access.revoked(permissions.origins ?? []); changed(); })); });
     browser.runtime.onStartup.addListener(() => { initialize(); ai.discard(); safely(ready.then(async () => { await (await store()).recover(autofill.owner, true); await access.event(null, 'restart'); })); });
     browser.runtime.onInstalled.addListener(initialize);
     initialize();

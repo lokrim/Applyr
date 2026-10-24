@@ -6,9 +6,10 @@ import type { browser } from 'wxt/browser';
 import { startFormFixtures } from './forms';
 
 declare const chrome: typeof browser;
-export const test = base.extend<{ aiProviderGrants: boolean; inspector: { context: BrowserContext; fixtures: Awaited<ReturnType<typeof startFormFixtures>>; source: Page; popup: () => Promise<Page> } }>({
+export const test = base.extend<{ aiProviderGrants: boolean; notificationGrants: boolean; inspector: { context: BrowserContext; fixtures: Awaited<ReturnType<typeof startFormFixtures>>; source: Page; popup: () => Promise<Page> } }>({
   aiProviderGrants: [false, { option: true }],
-  inspector: async ({ browserName, aiProviderGrants }, use) => {
+  notificationGrants: [false, { option: true }],
+  inspector: async ({ browserName, aiProviderGrants, notificationGrants }, use) => {
     expect(browserName).toBe('chromium');
     const fixtures = await startFormFixtures();
     const directory = await mkdtemp(path.join(tmpdir(), 'applyr-inspection-'));
@@ -18,6 +19,7 @@ export const test = base.extend<{ aiProviderGrants: boolean; inspector: { contex
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
     // Same production JavaScript; test-only install grant to one loopback HOST.
     // This host pattern omits the port and matches all ports; localhost stays denied.
+    if (notificationGrants) manifest.permissions.push('notifications');
     manifest.host_permissions = ['https://127.0.0.1/*', ...(aiProviderGrants ? ['https://api.openai.com/*'] : [])];
     await writeFile(manifestPath, JSON.stringify(manifest));
     const context = await chromium.launchPersistentContext(path.join(directory, 'profile'), {

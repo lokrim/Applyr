@@ -5,6 +5,7 @@ import { ActionResultSchema, type ActionResult } from '../forms/operations';
 import type { ApplyrDatabase } from './database';
 import { LOCAL_STORES, purgeDocumentRecords } from './documents';
 
+import { accessQueue } from '../attention/queue';
 const CURRENT = 'current';
 export class StaleCheckpointError extends Error {}
 
@@ -36,7 +37,7 @@ export class CheckpointStore {
 
   // Compare-and-swap in a single IDB transaction prevents two UI surfaces replacing newer state.
   async replace(next: SessionCheckpoint | null, expected: { sessionId: string | null; revision: number | null }) {
-    if (next) CheckpointSchema.parse(next);
+    if (next) { next = { ...next, attention: accessQueue(next) }; CheckpointSchema.parse(next); }
     const transaction = this.database.transaction(LOCAL_STORES, 'readwrite');
     const checkpoints = transaction.objectStore('checkpoints');
     const raw = await checkpoints.get(CURRENT);

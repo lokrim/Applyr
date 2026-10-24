@@ -1,0 +1,13 @@
+import { z } from 'zod';
+import { SessionCorrectionSchema } from '../mapping/schema';
+const id = z.string().uuid(), hash = z.string().regex(/^[a-f0-9]{64}$/), integer = z.number().int().nonnegative();
+export const AttentionCode = z.enum(['draft', 'missing', 'ambiguous', 'eligibility', 'consent', 'sensitive', 'login', 'otp', 'captcha', 'authentication', 'unsupported', 'validation', 'upload', 'navigation', 'permission', 'recovery']);
+const inspectionContext = { tabId: integer, frameId: integer, browserDocumentId: z.string().max(240).nullable(), identity: hash, document: id, revision: integer, formId: id.nullable() };
+export const AttentionContextSchema = z.strictObject({ ...inspectionContext, multipleForms: z.boolean().optional() });
+export const AttentionTargetSchema = z.strictObject({ ...inspectionContext, fieldId: id, signature: hash });
+export const AttentionItemSchema = z.strictObject({ id, key: z.string().max(500), revision: integer, code: AttentionCode, question: z.string().max(240), reason: z.string().max(600), action: z.string().max(600), required: z.boolean(), status: z.enum(['open', 'answer_ready', 'resolved', 'stale']), target: AttentionTargetSchema.optional(), context: AttentionContextSchema.optional(), sourcePath: z.string().max(240).nullable(), inputKind: z.enum(['text', 'boolean', 'number']), correctable: z.boolean(), correction: SessionCorrectionSchema.optional() });
+export const AttentionSchema = z.strictObject({ version: z.literal(1), revision: integer, items: z.array(AttentionItemSchema).max(200) });
+export type Attention = z.infer<typeof AttentionSchema>;
+export type AttentionItem = z.infer<typeof AttentionItemSchema>;
+export type AttentionTarget = z.infer<typeof AttentionTargetSchema>;
+export const AttentionAnswerSchema = z.strictObject({ itemId: id, itemRevision: integer, value: SessionCorrectionSchema.shape.value, eligibilityConfirmed: z.boolean() });

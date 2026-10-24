@@ -86,7 +86,7 @@ test('real extension profile setup, import/export, explicit defaults, frozen rep
     expect(parseProfileMarkdown(await download(imported)).document).toEqual(original);
     await expect(imported.locator('.profile-workspace').getByRole('status')).toContainText('Nothing has been saved');
     await imported.getByText('Review or repair imported Markdown', { exact: true }).click();
-    await imported.getByRole('button', { name: 'Return to form', exact: true }).click();
+    await imported.getByRole('button', { name: 'Return to profile form', exact: true }).click();
     await validate(imported); expect(parseProfileMarkdown(await download(imported)).document).toEqual(original);
 
     const session = await page('session'); await session.getByRole('button', { name: 'Preview saved default' }).click(); await session.getByRole('button', { name: 'Freeze profile for this session' }).click();
@@ -107,7 +107,7 @@ test('real extension profile setup, import/export, explicit defaults, frozen rep
     await session.locator('.snapshot-summary summary').click();
     await expect(session.locator('.snapshot-summary pre')).not.toContainText('identity:'); await expect(session.locator('.snapshot-summary pre')).not.toContainText('contact:');
     await options.getByRole('button', { name: 'Reload profile state' }).click(); await options.getByRole('button', { name: 'Edit saved default' }).click(); await expect(options.getByTestId('profile-preview')).toContainText('Updated Fictional Default');
-    await session.getByRole('button', { name: 'Propose profile update' }).click(); await expect(session.getByRole('heading', { name: 'Proposed persistent update' })).toBeVisible(); await session.getByRole('button', { name: 'Save proposed default' }).click(); await expect(session.getByRole('status')).toContainText('explicitly saved');
+    await session.getByRole('button', { name: 'Propose profile update' }).click(); await expect(session.getByRole('heading', { name: 'Proposed persistent update' })).toBeVisible(); await session.getByRole('button', { name: 'Save proposed default' }).click(); await expect(session.locator('.profile-workspace').getByRole('status')).toContainText('explicitly saved');
     await options.getByRole('button', { name: 'Reload profile state' }).click(); await options.getByRole('button', { name: 'Edit saved default' }).click(); await expect(options.getByTestId('profile-preview')).not.toContainText('identity:');
 
     // Unknown-key repair is deliberate and errors do not contain field values.

@@ -4,6 +4,7 @@ import { RequestSchema, type Response } from './schemas';
 import { trustedPage, type Sender } from '../security/sender';
 import { CheckpointStore, StaleCheckpointError } from '../storage/checkpoints';
 import { initialAccess, type PageAccessService } from './page-access';
+import type { AttentionService } from '../attention/service';
 import type { AutofillService } from './autofill';
 
 export interface CoordinatorDependencies {
@@ -15,6 +16,7 @@ export interface CoordinatorDependencies {
   uuid: () => string;
   access?: PageAccessService;
   autofill?: AutofillService;
+  attention?: AttentionService;
   changed?: () => void;
   discardAi?: () => void;
 }
@@ -33,6 +35,15 @@ export function createCoordinator(dependencies: CoordinatorDependencies) {
       const store = await dependencies.store();
       let checkpoint: SessionCheckpoint | null = null;
       switch (message.type) {
+        case 'ATTENTION_ANSWERS':
+        case 'REINSPECT_ATTENTION': {
+          if (!dependencies.attention) return fail('ACCESS_UNAVAILABLE');
+          const result = message.type === 'ATTENTION_ANSWERS' ? await dependencies.attention.answers(message) : await dependencies.attention.reinspect(message, message.itemId);
+          return { schemaVersion: 1, requestId: message.requestId, ok: true, ...result };
+        }
+        case 'SHOW_ATTENTION':
+          if (!dependencies.attention) return fail('ACCESS_UNAVAILABLE');
+          checkpoint = await dependencies.attention.show(message, message.itemId); break;
         case 'RESTORE_SESSION':
           dependencies.discardAi?.(); checkpoint = await store.restore(message.archivedId, message); break;
         case 'REATTACH_SESSION':
@@ -71,6 +82,7 @@ export function createCoordinator(dependencies: CoordinatorDependencies) {
         case 'INSPECT_FORM': {
           if (!dependencies.access) return fail('ACCESS_UNAVAILABLE');
           const result = await dependencies.access.inspect(message, message.frameOrigin, message.frameIdentity, message.selection);
+          if (dependencies.attention) result.checkpoint = await dependencies.attention.observe(result.checkpoint, result.inspection);
           return { schemaVersion: 1, requestId: message.requestId, ok: true, ...result };
         }
         case 'GET_STATE': {

@@ -19,7 +19,9 @@ async function setup(inspector: { context: Page['context'] extends () => infer C
   return { session, popup };
 }
 async function startData(session: Page) {
-  const cp = await current(session), inspection = (await request(session, { type: 'INSPECT_FORM', sessionId: cp.id, revision: cp.revision })).inspection!;
+  const before = await current(session);
+  const observed = await request(session, { type: 'INSPECT_FORM', sessionId: before.id, revision: before.revision });
+  const cp = observed.checkpoint!, inspection = observed.inspection!;
   const inputVersion = await session.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve) => { const q = indexedDB.open('applyr-local'); q.onsuccess = () => resolve(q.result); });
     return new Promise<string>((resolve) => { const q = db.transaction('profiles').objectStore('profiles').get('snapshot'); q.onsuccess = () => { db.close(); resolve(q.result.version); }; });

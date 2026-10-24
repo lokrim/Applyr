@@ -8,6 +8,8 @@ import { ProfileSummary, ProfileWorkspace } from './ProfileWorkspace';
 import { DocumentSummary, DocumentWorkspace } from './DocumentWorkspace';
 import { TargetWorkspace } from './TargetWorkspace';
 import { SessionControls } from './SessionControls';
+import { AttentionQueue } from './AttentionQueue';
+import { NotificationSettings } from './NotificationSettings';
 import { ProviderSettings } from './ProviderSettings';
 
 export type Surface = 'popup' | 'session' | 'options';
@@ -89,6 +91,7 @@ export function App({ surface }: { surface: Surface }) {
           </> : <p>Open the toolbar popup on your intended application tab to save a source reference. No profile has been added.</p>}
         </section>
 
+        {checkpoint && surface !== 'popup' && <AttentionQueue key={checkpoint.id} checkpoint={checkpoint} onChange={setCheckpoint} />}
         {checkpoint && <SessionControls checkpoint={checkpoint} onChange={setCheckpoint} />}
         <TargetWorkspace key={`target-${checkpoint?.id ?? 'empty'}`} checkpoint={checkpoint} onChange={setCheckpoint} />
 
@@ -123,10 +126,11 @@ export function App({ surface }: { surface: Surface }) {
         {surface !== 'popup' && <ProfileWorkspace key={checkpoint?.id ?? 'no-session'} surface={surface} sessionId={checkpoint?.id ?? null} onFreeze={async () => { setCheckpoint(await readCheckpoint()); }} />}
 
         {surface === 'options' && <ProviderSettings />}
+        {surface === 'options' && <NotificationSettings />}
         {surface === 'options' && <section className="card" aria-labelledby="storage-heading">
           <h2 id="storage-heading">Local recovery & permissions</h2>
           <p>{branding.copy.privacy}</p>
-          <p>Site access is requested per displayed origin through an explicit click. Browser controls can revoke it. Notifications remain off. Provider testing is optional and always synthetic.</p>
+          <p>Site access is requested per displayed origin through an explicit click. Browser controls can revoke it. Notifications are optional and initially off. Provider testing is optional and always synthetic.</p>
           <p>Saved profiles and reusable resumes stay in extension-origin IndexedDB until explicitly deleted or replaced. Session recovery copies expire after seven days; unsaved documents are also removed on cancellation or finish.</p>
           <button className="secondary" disabled={busy || !checkpoint} onClick={() => void perform(async () => {
             if (checkpoint) setCheckpoint(await sendIntent({ type: 'FORGET_CHECKPOINT', sessionId: checkpoint.id, revision: checkpoint.revision }));

@@ -1,3 +1,4 @@
+import { draftQueue } from '../attention/queue';
 import type { IDBPDatabase } from 'idb';
 import type { ApplyrDatabase } from '../storage/database';
 import { transition, terminal, LEASE_MS, type SessionCheckpoint } from '../domain/session';
@@ -19,7 +20,12 @@ export class AiService {
   constructor(private database: () => Promise<IDBPDatabase<ApplyrDatabase>>, private providers: ProviderService, private autofill: AutofillService, private changed: () => void = () => {}) {}
   discard() { this.pending?.abort(); this.pending = null; this.batch = null; }
   async execute(request: AiRequest) {
-    if (request.type === 'DISCARD') { this.discard(); return { batch: null, message: 'AI is off. Deterministic autofill remains available.' }; }
+    if (request.type === 'DISCARD') { this.discard();
+      const store = new CheckpointStore(await this.database()), cp = await store.read();
+      if (cp?.attention?.items.some((i) => i.key.startsWith('draft:') && i.status === 'open')) {
+        await store.replace({ ...cp, revision: cp.revision + 1, updatedAt: Date.now(), attention: { ...cp.attention, revision: cp.attention.revision + 1, items: cp.attention.items.map((i) => i.key.startsWith('draft:') ? { ...i, status: 'stale', revision: i.revision + Number(i.status !== 'stale') } : i) } }, { sessionId: cp.id, revision: cp.revision }); this.changed();
+      }
+      return { batch: null, message: 'AI is off. Deterministic autofill remains available.' }; }
     if (request.type === 'PREPARE') {
       if (this.pending) throw new ProviderFailure('busy');
       this.batch = null;
@@ -45,8 +51,11 @@ export class AiService {
         if (controller.signal.aborted || latest?.version !== input.version || current?.id !== cp.id || current.revision !== preparing.revision || current.lifecycle !== 'RUNNING' || current.pauseRequested) throw new ProviderFailure('stale');
         const review: ReviewBatch = { id: crypto.randomUUID(), binding: previewBinding(request.inspection, input), context, proposals: validateProposals({ scope: context.scope, revision: context.revision, proposals: result.proposals }, context), model: result.model, provider: request.provider };
         const completed = { ...current, revision: current.revision + 1, updatedAt: Date.now(), lifecycle: cp.lifecycle, phase: cp.phase, lease: undefined, providerRequests: current.providerRequests?.map((r) => r.id === request.requestId ? { ...r, status: 'completed' as const } : r), aiRequest: { ...preparing.aiRequest, status: 'completed' as const } };
+        const questions = review.context.fields.filter((f) => review.proposals.some((p) => p.fieldId === f.id));
+        completed.attention = draftQueue(completed, review.id, questions);
         await store.replace(completed, { sessionId: cp.id, revision: current.revision }); durable = null;
         this.batch = { review, inspection: request.inspection, checkpointRevision: completed.revision, expiresAt: Math.min(input.expiresAt, Date.now() + 15 * 60_000) };
+        this.changed();
         return { batch: review, message: 'Review source facts and wording. Nothing has been inserted.' };
       } catch (e) {
         if (durable) {
@@ -73,7 +82,8 @@ export class AiService {
     });
     // Consume BEFORE awaiting insertion: duplicate decisions never replay a write.
     this.batch = null;
-    await store.replace({ ...checkpoint, revision: checkpoint.revision + 1, updatedAt: Date.now(), approval: { batchId: saved.review.id, inputVersion: saved.review.binding.inputVersion, document: saved.review.binding.document, revision: saved.review.binding.revision, at: Date.now(), decisions: request.decisions.map((d) => ({ fieldId: d.fieldId, action: d.action, text: values.find((v) => v.fieldId === d.fieldId)?.value.kind === 'text' ? d.text : '' })) } }, { sessionId: checkpoint.id, revision: checkpoint.revision });
+    const attention = checkpoint.attention ? { ...checkpoint.attention, revision: checkpoint.attention.revision + 1, items: checkpoint.attention.items.map((i) => i.key.startsWith(`draft:${saved.review.id}:`) ? { ...i, status: 'resolved' as const, revision: i.revision + 1 } : i) } : undefined;
+    await store.replace({ ...checkpoint, attention, revision: checkpoint.revision + 1, updatedAt: Date.now(), approval: { batchId: saved.review.id, inputVersion: saved.review.binding.inputVersion, document: saved.review.binding.document, revision: saved.review.binding.revision, at: Date.now(), decisions: request.decisions.map((d) => ({ fieldId: d.fieldId, action: d.action, text: values.find((v) => v.fieldId === d.fieldId)?.value.kind === 'text' ? d.text : '' })) } }, { sessionId: checkpoint.id, revision: checkpoint.revision });
     if (values.length) {
       try { await this.autofill.applyApproved(saved.inspection, saved.review.binding.inputVersion, values); }
       catch (error) {
@@ -85,6 +95,7 @@ export class AiService {
         throw error;
       }
     }
+    this.changed();
     return { batch: null, message: values.length ? 'Approved values processed. Review saved field results and the website. Reinspect before another batch.' : 'Proposals rejected. No page values changed.' };
   }
 }

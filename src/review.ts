@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AdapterSchema } from './adapters/schema';
 import type { SessionCheckpoint } from './domain/session';
 import { reviewReady } from './domain/session';
 import type { Inspection } from './forms/schema';
@@ -8,7 +9,7 @@ import { pending } from './attention/queue';
 
 export const FieldReviewSchema = z.strictObject({
   at: z.number().int().nonnegative(),
-  areas: z.array(z.strictObject({ frameId: z.number().int().nonnegative(), unsupported: z.number().int().nonnegative() })).max(16),
+  areas: z.array(z.strictObject({ frameId: z.number().int().nonnegative(), unsupported: z.number().int().nonnegative(), adapter: AdapterSchema.optional() })).max(16),
   items: z.array(z.strictObject({
     fieldId: z.uuid(), label: z.string().max(240), required: z.boolean(), upload: z.boolean(), approvedDraft: z.boolean(),
     status: z.enum(['accepted', 'manual', 'rejected', 'unverified', 'unresolved']),
@@ -32,7 +33,7 @@ export async function observeReview(cp: SessionCheckpoint, inspection: Inspectio
     items.push({ fieldId: f.id, label: (f.radioGroup?.label || f.label || 'Unlabelled field').slice(0, 240), required: f.required, upload: f.type === 'file', approvedDraft: accepted && !!op?.approvedDraft, status, fingerprint: f.current.fingerprint,
       target: { tabId: inspection.tabId, frameId: inspection.frameId, browserDocumentId: inspection.browserDocumentId, identity: s.identity, document: s.document, revision: s.revision, formId: s.selectedForm, fieldId: f.id, signature } });
   }
-  return { at: Date.now(), areas: [...cp.review?.areas.filter((a) => a.frameId !== inspection.frameId) ?? [], { frameId: inspection.frameId, unsupported: s.unsupported.length + Number(s.status !== 'stable') }], items: [...cp.review?.items.filter((i) => i.target.frameId !== inspection.frameId) ?? [], ...items].slice(0, 400) };
+  return { at: Date.now(), areas: [...cp.review?.areas.filter((a) => a.frameId !== inspection.frameId) ?? [], { frameId: inspection.frameId, unsupported: s.unsupported.length + Number(s.status !== 'stable'), ...(s.adapter ? { adapter: s.adapter } : {}) }], items: [...cp.review?.items.filter((i) => i.target.frameId !== inspection.frameId) ?? [], ...items].slice(0, 400) };
 }
 export function reviewSummary(cp: SessionCheckpoint) {
   const rows = cp.review?.items ?? [];

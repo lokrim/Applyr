@@ -1,3 +1,4 @@
+import { adapterDescription } from '../adapters/schema';
 import { useState } from 'react';
 import type { SessionCheckpoint } from '../domain/session';
 import type { FormSelection, Inspection } from '../forms/schema';
@@ -32,6 +33,7 @@ export function FormInspection({ checkpoint }: { checkpoint: SessionCheckpoint }
     {error && <p role="alert">{error}</p>}
     {snapshot && <div data-testid="form-inspection">
       <p role="status">Snapshot {snapshot.revision}: {snapshot.status.replaceAll('_', ' ')}. {snapshot.fields.length} fields. This is a point-in-time observation; reinspect after changing the page.</p>
+      <p data-testid="adapter-evidence">{adapterDescription(snapshot.adapter)}</p>
       <p className="muted">Frame {inspection.frameId} · Document {snapshot.document}</p>
       {snapshot.status === 'stable' && snapshot.selectedForm && <DryRunPreview inspection={inspection} inputVersion={inspectedInputVersion} checkpoint={checkpoint} />}
       {snapshot.status === 'selection_required' && <fieldset><legend>Select the application form to inspect</legend>{snapshot.forms.map((form, index) => <button key={form.id} onClick={() => void inspect({ formId: form.id, document: snapshot.document, revision: snapshot.revision })}>{index + 1}. {form.label} ({form.fieldCount} controls)</button>)}</fieldset>}

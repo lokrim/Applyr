@@ -40,6 +40,6 @@ export type ContentOperation = z.infer<typeof ContentOperationSchema>;
 
 // Persist a digest of semantics, never a DOM reference or current page value.
 export async function recoverySignature(field: FormSnapshot['fields'][number]) {
-  const bytes = new TextEncoder().encode(JSON.stringify([field.id, field.label, field.labelSource, field.context, field.type, field.autocomplete, field.required, field.executable, field.category, field.filePurpose, field.constraints, field.options, field.radioGroup ? [field.radioGroup.primary, field.radioGroup.label] : null]));
+  const bytes = new TextEncoder().encode(JSON.stringify([field.id, field.label, field.labelSource, field.context, field.type, field.autocomplete, field.required, field.executable, field.category, field.filePurpose, field.constraints, field.options, field.radioGroup ? [field.radioGroup.primary, field.radioGroup.label] : null, ...(field.control ? [field.control] : [])]));
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (b) => b.toString(16).padStart(2, '0')).join('');
 }

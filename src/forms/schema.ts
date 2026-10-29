@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AdapterSchema } from '../adapters/schema';
 
 const text = z.string().max(240);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -6,6 +7,7 @@ const id = z.string().uuid();
 export const SelectionSchema = z.strictObject({ formId: id, document: id, revision: z.number().int().positive() });
 export const FormSnapshotSchema = z.strictObject({
   schemaVersion: z.literal(1),
+  adapter: AdapterSchema.optional(),
   identity: hash, document: id, revision: z.number().int().positive(),
   status: z.enum(['stable', 'unstable', 'selection_required', 'stale_selection']),
   selectedForm: id.nullable(),
@@ -14,6 +16,7 @@ export const FormSnapshotSchema = z.strictObject({
     id, label: text, labelSource: z.enum(['label', 'aria', 'placeholder', 'missing']),
     context: z.array(text).max(5), type: z.enum(['text', 'email', 'tel', 'url', 'date', 'month', 'number', 'select', 'textarea', 'radio', 'checkbox', 'file']), autocomplete: text,
     required: z.boolean(), executable: z.boolean(),
+    control: z.literal('inline_listbox_v1').optional(),
     category: z.enum(['short_answer', 'long_answer', 'choice', 'preference', 'declaration', 'sensitive', 'file', 'missing_semantics']),
     filePurpose: z.enum(['resume', 'cover_letter', 'portfolio', 'transcript', 'unknown']).nullable(),
     constraints: z.strictObject({ min: text, max: text, step: text, minLength: text, maxLength: text, pattern: text, accept: text, multiple: z.boolean() }),
@@ -28,7 +31,7 @@ export const FormSnapshotSchema = z.strictObject({
   const formIds = new Set(snapshot.forms.map((form) => form.id));
   return formIds.size === snapshot.forms.length && new Set(snapshot.fields.map((field) => field.id)).size === snapshot.fields.length &&
     (snapshot.selectedForm === null ? snapshot.fields.length === 0 : formIds.has(snapshot.selectedForm)) &&
-    snapshot.fields.every((field) => !field.executable || (!['declaration', 'sensitive', 'missing_semantics'].includes(field.category) && (field.type !== 'file' || field.filePurpose === 'resume')));
+    snapshot.fields.every((field) => (!field.control || (field.type === 'select' && ['choice', 'sensitive', 'declaration'].includes(field.category) && !field.constraints.multiple)) && (!field.executable || (!['declaration', 'sensitive', 'missing_semantics'].includes(field.category) && (field.type !== 'file' || field.filePurpose === 'resume'))));
 }, 'Inconsistent form snapshot');
 export type FormSnapshot = z.infer<typeof FormSnapshotSchema>;
 export type FormSelection = z.infer<typeof SelectionSchema>;

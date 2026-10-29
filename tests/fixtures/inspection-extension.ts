@@ -6,10 +6,11 @@ import type { browser } from 'wxt/browser';
 import { startFormFixtures } from './forms';
 
 declare const chrome: typeof browser;
-export const test = base.extend<{ aiProviderGrants: boolean; notificationGrants: boolean; inspector: { context: BrowserContext; fixtures: Awaited<ReturnType<typeof startFormFixtures>>; source: Page; popup: () => Promise<Page> } }>({
+export const test = base.extend<{ platformGrants: boolean; aiProviderGrants: boolean; notificationGrants: boolean; inspector: { context: BrowserContext; fixtures: Awaited<ReturnType<typeof startFormFixtures>>; source: Page; popup: () => Promise<Page> } }>({
+  platformGrants: [false, { option: true }],
   aiProviderGrants: [false, { option: true }],
   notificationGrants: [false, { option: true }],
-  inspector: async ({ browserName, aiProviderGrants, notificationGrants }, use) => {
+  inspector: async ({ browserName, aiProviderGrants, notificationGrants, platformGrants }, use) => {
     expect(browserName).toBe('chromium');
     const fixtures = await startFormFixtures();
     const directory = await mkdtemp(path.join(tmpdir(), 'applyr-inspection-'));
@@ -20,7 +21,7 @@ export const test = base.extend<{ aiProviderGrants: boolean; notificationGrants:
     // Same production JavaScript; test-only install grant to one loopback HOST.
     // This host pattern omits the port and matches all ports; localhost stays denied.
     if (notificationGrants) manifest.permissions.push('notifications');
-    manifest.host_permissions = ['https://127.0.0.1/*', ...(aiProviderGrants ? ['https://api.openai.com/*'] : [])];
+    manifest.host_permissions = ['https://127.0.0.1/*', ...(platformGrants ? ['https://job-boards.greenhouse.io/*', 'https://jobs.lever.co/*'] : []), ...(aiProviderGrants ? ['https://api.openai.com/*'] : [])];
     await writeFile(manifestPath, JSON.stringify(manifest));
     const context = await chromium.launchPersistentContext(path.join(directory, 'profile'), {
       channel: 'chromium', headless: true, ignoreHTTPSErrors: true,

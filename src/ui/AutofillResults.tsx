@@ -1,3 +1,4 @@
+import { adapterDescription } from '../adapters/schema';
 import { reviewSummary } from '../review';
 import type { SessionCheckpoint } from '../domain/session';
 import { sendRequest } from '../runtime/client';
@@ -11,6 +12,7 @@ export function AutofillResults({ checkpoint }: { checkpoint: SessionCheckpoint 
   const results = state.operations.map((o) => o.result);
   return <section aria-label="Autofill results" data-testid="autofill-results">
     <h3>{summary.ready ? checkpoint.reviewScope === 'final_review' ? 'Autofill finished — review and submit on the website' : 'Current step ready for review' : 'Review required — unresolved or unverified items'}</h3>
+    {checkpoint.review?.areas.map((area) => <p key={area.frameId}>Frame {area.frameId}: {adapterDescription(area.adapter)}</p>)}
     <p data-testid="review-counts">{summary.accepted} accepted fills · {summary.manual} manually completed / existing values · {summary.drafts} accepted approved drafts · {summary.required} unresolved required questions · {summary.uncertain} uncertain mappings / draft reviews · {summary.uploads} failed or unverified uploads</p>
     <p>Autofill status: {state.status}. These are observations for inspected controls, not proof of a complete application. Use the website’s Next and submit controls yourself.</p>
     <p>{checkpoint.review ? checkpoint.review.items.filter((i) => i.status === 'rejected').length : results.filter((r) => r?.status === 'rejected').length} rejected fields · {checkpoint.review ? checkpoint.review.items.filter((i) => i.status === 'unverified').length : results.filter((r) => !r || r.status === 'unverified').length} unverified fields · {results.filter((r) => r?.status === 'skipped_user_change').length} user changes preserved · {results.filter((r) => r?.status === 'unsupported').length} unsupported operations</p>

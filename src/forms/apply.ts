@@ -33,6 +33,49 @@ export async function operateControl(command: ContentOperation): Promise<ActionR
   }
   const field = state.snapshot?.fields.find((f) => f.id === command.fieldId);
   const e = state.registry.get(command.fieldId)?.deref();
+  // The only custom operation is an already visible, registered inline option.
+  // No selector, menu-opening click, native activation or caller-supplied target.
+  if (field?.control === 'inline_listbox_v1' && e?.isConnected) {
+    const choices = state.choices?.get(field.id);
+    const safe = () => !!choices && e.isConnected && state.safeRead?.(field.id) && choices.valid();
+    const error = () => e.getAttribute('aria-invalid') === 'true' || (e.getAttribute('aria-errormessage') ?? '').split(/\s+/).slice(0, 5).some((id) => { const n = (e.getRootNode() as Document | ShadowRoot).getElementById(id); return !!n && n.getClientRects().length > 0 && getComputedStyle(n).visibility !== 'hidden' && !!n.textContent?.trim(); });
+    if (!choices || !safe()) return result('unsupported', 'stale_control');
+    const expected = command.type === 'write' ? command.value : command.type === 'observe' ? command.expected : null;
+    if (!expected || expected.kind !== 'choice') return result('unsupported', 'manual_control');
+    const option = field.options.find((o) => o.fingerprint === expected.optionFingerprint && !o.disabled && o.label === expected.label);
+    if (!option) return result('unsupported', 'manual_control');
+    if (command.type === 'observe') {
+      if (state.revision !== command.binding.revision || !state.guard?.()) return result('unverified', 'stale_control');
+      const equal = await opaque(choices.read()) === expected.optionFingerprint;
+      return !safe() || !state.guard?.() ? result('unverified', 'stale_control') : equal ? error() ? result('rejected', 'site_error') : result('accepted', 'persisted_valid') : result('skipped_user_change', 'user_change');
+    }
+    if (command.type !== 'write' || !field.executable || field.category !== 'choice' || field.current.present || state.busy || state.revision !== command.binding.revision || !state.guard?.()) return result('unsupported', 'manual_control');
+    const before = choices.read();
+    if (await opaque(before) !== command.precondition || !state.guard?.() || !safe() || choices.read() !== before) return result('skipped_user_change', 'user_change');
+    if (agent.cache.size >= 100) return result('unsupported', 'manual_control');
+    const pending = Promise.resolve().then(async () => {
+      if (agent.cancelled.has(command.runId)) return result('unverified', 'cancelled');
+      if (!state.guard?.() || !safe() || choices.read() !== before) return result('skipped_user_change', 'user_change');
+      let userEdit = false;
+      const edited = (event: Event) => { if (event.isTrusted) userEdit = true; };
+      e.addEventListener('click', edited, true); e.addEventListener('keydown', edited, true);
+      try {
+        if (!choices.choose(expected.optionFingerprint)) return result('unsupported', 'manual_control');
+        for (let pass = 0; pass < 4; pass++) {
+          await new Promise((r) => setTimeout(r, 160));
+          if (userEdit) return result('skipped_user_change', 'user_change');
+          if (!safe() || await hash(new TextEncoder().encode(address())) !== command.binding.identity) return result('unverified', 'stale_control');
+        }
+        const after = choices.read(), fingerprint = await opaque(after);
+        if (userEdit || choices.read() !== after) return result('skipped_user_change', 'user_change');
+        if (fingerprint !== expected.optionFingerprint) return result('rejected', 'value_rejected');
+        return safe() ? error() ? result('rejected', 'site_error') : result('accepted', 'persisted_valid') : result('unverified', 'stale_control');
+      } catch { return result('unverified', 'unknown_effect'); }
+      finally { e.removeEventListener('click', edited, true); e.removeEventListener('keydown', edited, true); }
+    });
+    agent.cache.set(command.operationId, { key, result: pending });
+    return pending;
+  }
   if (!field || !e || !e.isConnected || !(e instanceof HTMLInputElement || e instanceof HTMLSelectElement || e instanceof HTMLTextAreaElement)) { clear(); return result('unsupported', 'stale_control'); }
   const visibleError = () => {
     const root = e.getRootNode() as Document | ShadowRoot;

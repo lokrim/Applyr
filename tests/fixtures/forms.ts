@@ -5,6 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { build } from 'vite';
+import { platformPattern } from './platform-patterns';
 
 const native = `<form id="application" aria-label="Job application">
 <fieldset><legend>Personal information</legend><label>Full name<input name="name" autocomplete="name" required value="Alex Fiction"></label><label>Email<input name="email" type="email" autocomplete="email" required></label>
@@ -18,6 +19,11 @@ const native = `<form id="application" aria-label="Job application">
 <form id="newsletter"><label>Email newsletter<input value="F05_UNRELATED_CANARY"></label></form><form id="search"><input type="search" value="F05_SEARCH_CANARY"></form>`;
 const fields = '<label>Full name<input name="name" required></label><label>Email<input name="email" type="email" required></label>';
 const pages: Record<string, string> = {
+  F12: platformPattern('F12'), F13: platformPattern('F13'),
+  'F12-embedded': '<iframe title="Job application F12" src="/F12"></iframe>',
+  'F13-embedded': '<iframe title="Job application F13" src="/F13"></iframe>',
+  'F13-cross': '<iframe title="Job application F13" src="CROSS/F13"></iframe>',
+
   M06: `<form id="application" aria-label="Mapping review application"><label>Email<input type="email" required></label><label>First name<input autocomplete="given-name" required></label><label>Last name<input autocomplete="family-name" required></label><label>Willing to relocate<select required><option value="">Choose</option><option value="true">Yes</option><option value="false">No</option></select></label><label>Are you authorized to work in US?<select required><option value="">Choose</option><option value="yes">Yes</option><option value="no">No</option></select></label><label>Do you require sponsorship in India?<select><option value="">Choose</option><option>Yes</option><option>No</option></select></label><label>I certify my answers<input type="checkbox" required autocomplete="email"></label><label>Gender<select><option value="">Choose</option><option>Female</option><option>Male</option></select></label><div role="combobox" aria-label="Unsupported custom question">Choose</div><button>Finalize application</button></form>`,
   F01: native,
   F02: '<div id="react-root"></div><script src="/react.js"></script>',
@@ -60,6 +66,7 @@ export async function startFormFixtures() {
       const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
       const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk));
       requests.push({ origin: `https://${req.headers.host}`, path: pathname, method: req.method ?? '', bytes: Buffer.concat(chunks).length, digest: req.method === 'POST' ? createHash('sha256').update(Buffer.concat(chunks)).digest('hex') : null });
+      if (pathname === '/pattern-upload') { res.writeHead(200); res.end('Owned receiver accepted bytes'); return; }
       if (pathname === '/upload') { res.writeHead(422); res.end('Synthetic receiver rejection'); return; }
       if (pathname === '/react.js') { res.setHeader('Content-Type', 'text/javascript'); res.end(bundle.code); return; }
       const body = pathname === '/embedded' ? `<form id="application">${fields}</form>` : pages[pathname.slice(1)] ?? '<p>Unrelated advertising</p>';

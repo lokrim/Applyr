@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { SessionCheckpoint } from '../domain/session';
 import { terminal } from '../domain/session';
 import { pending } from '../attention/queue';
@@ -9,12 +9,14 @@ import { getDatabase } from '../storage/database';
 import { updatedProfile } from '../mapping/rules';
 import { exportProfile } from '../profile/markdown';
 import type { ProfileDocument } from '../profile/schema';
-import { notifyProfileChange } from '../browser/profile-events';
+import { onProfileDeletion, notifyProfileChange } from '../browser/profile-events';
 
 export function AttentionQueue({ checkpoint: cp, onChange }: { checkpoint: SessionCheckpoint; onChange: (cp: SessionCheckpoint | null) => void }) {
   const [answers, setAnswers] = useState<Record<string, string>>({}), [confirmed, setConfirmed] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false), [notice, setNotice] = useState(''), [error, setError] = useState('');
   const [update, setUpdate] = useState<{ base: SavedProfile | null; document: ProfileDocument; path: string } | null>(null), [reviewed, setReviewed] = useState(false);
+  useEffect(() => onProfileDeletion(() => { setAnswers({}); setConfirmed({}); setUpdate(null); setReviewed(false); }), []);
+  useEffect(() => { if (terminal(cp)) { setAnswers({}); setConfirmed({}); setUpdate(null); setReviewed(false); } }, [cp.lifecycle]);
   const items = cp.attention?.items.filter(pending) ?? [];
   const ended = terminal(cp), disabled = busy || ended || cp.lifecycle === 'RUNNING';
   async function run(task: () => Promise<void>) {

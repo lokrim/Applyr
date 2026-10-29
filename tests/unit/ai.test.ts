@@ -73,7 +73,9 @@ describe('F11 minimal native AI proposals', () => {
       expect(String(url)).not.toContain(CREDENTIAL_CANARY);
       expect(new Headers(init.headers).get(provider === 'gemini' ? 'x-goog-api-key' : 'Authorization')).toContain(CREDENTIAL_CANARY);
       await s.decide(batch); expect(s.dispatch).toHaveBeenCalledOnce();
-      expect(await s.profiles.read()).toEqual(before);
+      const after = await s.profiles.read();
+      expect(after.saved).toEqual(before.saved); expect(after.snapshot?.document).toEqual(before.snapshot?.document); expect(after.snapshot?.version).toBe(before.snapshot?.version);
+      expect(after.snapshot!.expiresAt).toBeGreaterThanOrEqual(before.snapshot!.expiresAt);
       expect((await s.checkpoints.read())?.submission.status).toBe('unknown');
       await expect(s.decide(batch)).rejects.toMatchObject({ code: 'stale' }); expect(s.dispatch).toHaveBeenCalledOnce();
     });

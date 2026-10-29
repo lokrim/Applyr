@@ -43,7 +43,7 @@ test('F11 packaged essay and mapping batch: source review, edit/approve/reject, 
   expect(await send(options, { type: 'TEST', provider: 'openai', revision: 2 })).toMatchObject({ ok: true, view: { status: { state: 'verified' } } });
   const readProfiles = () => session.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((r) => { const q = indexedDB.open('applyr-local'); q.onsuccess = () => r(q.result); });
-    return new Promise<unknown[]>((r) => { const q = db.transaction('profiles').objectStore('profiles').getAll(); q.onsuccess = () => { db.close(); r(q.result); }; });
+    return new Promise<unknown[]>((r) => { const q = db.transaction('profiles').objectStore('profiles').getAll(); q.onsuccess = () => { db.close(); r(q.result.map((record: Record<string, unknown>) => Object.fromEntries(Object.entries(record).filter(([key]) => !['expiresAt', 'lastActivityAt'].includes(key))))); }; });
   });
   const before = await readProfiles();
   await session.bringToFront(); await session.getByRole('button', { name: 'Inspect fields', exact: true }).click();
@@ -65,7 +65,7 @@ test('F11 packaged essay and mapping batch: source review, edit/approve/reject, 
   await ai.getByLabel('I reviewed the evidence, factual claims, wording and length limits for every approved answer').check();
   await ai.getByRole('button', { name: 'Apply batch decisions and insert approved values' }).click();
   await expect(session.getByTestId('autofill-results')).toContainText('2 accepted', { timeout: 20000 });
-  await expect(session.getByTestId('autofill-results')).toContainText('Current-step autofill: review', { timeout: 20000 });
+  await expect(session.getByTestId('autofill-results')).toContainText('Autofill status: review', { timeout: 20000 });
   await expect(source.getByLabel('Why this role?', { exact: true })).toHaveValue('I built a TypeScript task board and would like to explore this work.');
   await expect(source.getByLabel('Project technology', { exact: true })).toHaveValue('TypeScript'); expect(await readProfiles()).toEqual(before);
   const audit = await worker.evaluate(() => (globalThis as unknown as { aiAudit: { payload: string; keyHeaderOnly: boolean }[] }).aiAudit);
@@ -90,7 +90,7 @@ test('F11 packaged essay and mapping batch: source review, edit/approve/reject, 
   await ai.getByLabel('I reviewed the evidence, factual claims, wording and length limits for every approved answer').check();
   await ai.getByRole('button', { name: 'Apply batch decisions and insert approved values' }).click();
   await expect(ai).toContainText('Proposals rejected'); await expect(source.getByLabel('Why this role?', { exact: true })).toHaveValue('');
-  await expect(session.getByTestId('autofill-results')).toContainText('2 accepted');
+  await expect(session.getByTestId('review-counts')).toContainText('1 accepted fills');
   // A new explicit request cannot overwrite a user edit made after review.
   await requestEssay(); await source.getByLabel('Why this role?', { exact: true }).fill('User-authored answer to preserve.');
   await ai.getByLabel('Decision for Why this role?', { exact: true }).selectOption('approve');
@@ -99,7 +99,7 @@ test('F11 packaged essay and mapping batch: source review, edit/approve/reject, 
   await expect(session.getByRole('region', { name: 'Session recovery' })).toContainText('approval changed');
   await expect(ai).toHaveCount(0);
   await expect(source.getByLabel('Why this role?', { exact: true })).toHaveValue('User-authored answer to preserve.');
-  await expect(session.getByTestId('autofill-results')).toContainText('2 accepted'); expect(await readProfiles()).toEqual(before);
+  await expect(session.getByTestId('review-counts')).toContainText('1 accepted fills'); expect(await readProfiles()).toEqual(before);
   await session.getByRole('button', { name: 'Resume and reinspect', exact: true }).click();
   await expect(session.getByRole('heading', { name: 'Session: queued', exact: true })).toBeVisible();
   await session.getByRole('button', { name: 'Inspect fields', exact: true }).click();

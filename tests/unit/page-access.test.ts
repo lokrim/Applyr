@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { deleteDB, type IDBPDatabase } from 'idb';
 import { openDatabase, type ApplyrDatabase } from '../../src/storage/database';
 import { CheckpointStore, StaleCheckpointError } from '../../src/storage/checkpoints';
+import { ProfileStore } from '../../src/storage/profiles';
 import { createCheckpoint, type SessionCheckpoint } from '../../src/domain/session';
 import { PageAccessService, initialAccess, permissionMatches } from '../../src/runtime/page-access';
 import { capturedTarget } from '../../src/browser/targets';
@@ -86,11 +87,13 @@ describe('page identity and scoped read-only access', () => {
   });
 
   it('marks target closure, restart, reload and revoked access visibly and preserves local inputs', async () => {
-    await database.put('profiles', { localCanary: 'retained' }, 'snapshot');
+    const snapshot = await new ProfileStore(database, () => 2_000).freeze(checkpoint.id, {
+      source: 'replacement', document: { data: { profile_version: 1 }, notes: 'retained', answerBodies: {} },
+    }, null);
     await service.event(7, 'closed');
     checkpoint = (await store.read())!;
     expect(checkpoint.access?.reason).toBe('closed');
-    expect(await database.get('profiles', 'snapshot')).toEqual({ localCanary: 'retained' });
+    expect(await database.get('profiles', 'snapshot')).toEqual(snapshot);
     await service.event(null, 'restart'); expect((await store.read())?.access?.reason).toBe('restart');
   });
 

@@ -45,7 +45,9 @@ test('production isolated inspector, inert review UI, exact frame denial, nonper
   const embedded = successful(await inspect(framed, { frameOrigin: same.origin, frameIdentity: same.identity })); expect(embedded.frameId).toBeGreaterThan(0); expect(embedded.snapshot.fields).toHaveLength(2); expect(embedded.snapshot.identity).toBe(same.identity);
 
   await source.goto(`${fixtures.origin}/F01`); await source.evaluate(() => { const clone = document.querySelector('form')!.cloneNode(true) as Element; clone.id = 'application-two'; clone.setAttribute('aria-label', 'Second application'); document.body.append(clone); });
-  const ambiguous = await inspector.popup(); await ambiguous.getByRole('button', { name: 'Use this tab', exact: true }).click();
+  const ambiguous = await inspector.popup(); const previousId = (await read(ambiguous)).checkpoint.id; await ambiguous.getByRole('button', { name: 'Use this tab', exact: true }).click();
+  await ambiguous.getByRole('button', { name: 'Start explicit separate run', exact: true }).click();
+  await expect.poll(async () => (await read(ambiguous)).checkpoint.id).not.toBe(previousId);
   await expect(ambiguous.getByTestId('page-classification')).toHaveText('application'); await ambiguous.getByRole('button', { name: 'Inspect fields', exact: true }).click();
   await expect(ambiguous.getByTestId('form-inspection')).toContainText('selection required');
   await ambiguous.getByRole('button', { name: /2\. Second application/ }).click(); await expect(ambiguous.getByTestId('form-inspection')).toContainText('21 fields');
@@ -76,6 +78,7 @@ test('isolated extension snapshots F02–F04/F06/F09, rerenders, dynamic require
   await source.getByRole('button', { name: 'Next', exact: true }).click();
   await expect.poll(async () => (await read(stepped)).checkpoint.access.reason).toBe('navigation'); expect(await inspect(stepped)).toMatchObject({ ok: false, code: 'ACCESS_UNAVAILABLE' });
   const nextPanel = await inspector.popup(); const previousStepId = (await read(nextPanel)).checkpoint.id; await nextPanel.getByRole('button', { name: 'Use this tab', exact: true }).click();
+  await nextPanel.getByRole('button', { name: 'Start explicit separate run', exact: true }).click();
   await expect.poll(async () => { const checkpoint = (await read(nextPanel)).checkpoint; return checkpoint.id !== previousStepId && !!checkpoint.access.inspectedAt; }).toBe(true);
   const after = successful(await inspect(nextPanel)); expect(after.snapshot.identity).not.toBe(before.snapshot.identity); expect(after.snapshot.fields.some((f) => f.type === 'textarea')).toBe(true); evidence.push({ fixture: 'F04', snapshot: after.snapshot });
   const shadow = await attach('F06'); const open = successful(await inspect(shadow)); expect(open.snapshot.fields.map((f) => f.label)).toEqual(['Full name', 'Email', 'Employer', 'Job title']); expect(open.snapshot.unsupported.some((u) => u.code === 'opaque_custom_element')).toBe(true); evidence.push({ fixture: 'F06', snapshot: open.snapshot });

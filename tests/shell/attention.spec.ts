@@ -37,7 +37,7 @@ test('packaged attention batch persists across UI reload, keyboard review, expli
   await expect(queue).toContainText('Reviewed answer: Alex');
   await session.getByRole('button', { name: 'Start Autofill', exact: true }).click();
   await expect(source.getByLabel('First name', { exact: true })).toHaveValue('Alex'); await expect(source.getByLabel('Last name', { exact: true })).toHaveValue('Fiction');
-  await expect(session.getByTestId('autofill-results')).toContainText('Current-step autofill: review', { timeout: 20000 });
+  await expect(session.getByTestId('autofill-results')).toContainText('Autofill status: review', { timeout: 20000 });
   await expect(source.getByLabel('I certify my answers')).not.toBeChecked();
   const declaration = queue.getByTestId('attention-item').filter({ hasText: 'I certify my answers' });
   await source.getByLabel('I certify my answers').check();

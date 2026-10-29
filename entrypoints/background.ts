@@ -1,3 +1,6 @@
+import { deleteLocalData } from '../src/storage/data-controls';
+import { notifyProfileDeletion } from '../src/browser/profile-events';
+import { notifyDocumentChange, onDocumentChange } from '../src/browser/document-events';
 import { AttentionService } from '../src/attention/service';
 import { AttentionAlerts, parseAlerts, openAttentionAlert } from '../src/browser/attention-alerts';
 import { markAttention } from '../src/forms/markers';
@@ -28,21 +31,25 @@ export default defineBackground({
   persistent: false,
   main() {
     const providers = new ProviderService(new ProviderStorage(getDatabase, browser.storage.session), (pattern) => browser.permissions.contains({ origins: [pattern], ...(import.meta.env.BROWSER === 'firefox' ? { data_collection: ['authenticationInfo'] } : {}) }), undefined, () => import.meta.env.BROWSER === 'firefox' ? browser.permissions.contains({ origins: [], ...{ data_collection: ['websiteContent', 'personallyIdentifyingInfo', 'authenticationInfo'] } }) : Promise.resolve(true));
-    const handleProvider = providerHandler(providers, browser.runtime.id, browser.runtime.getURL(branding.pages.options));
+    const handleProvider = providerHandler(providers, browser.runtime.id, browser.runtime.getURL(branding.pages.options), () => ai.discard());
     const store = async () => new CheckpointStore(await getDatabase());
     const target = async (tabId: number) => capturedTarget(await browser.tabs.get(tabId), import.meta.env.DEV);
     let previous: SessionCheckpoint | null = null;
+    let changeGeneration = 0;
     const changed = () => {
+      const generation = ++changeGeneration;
       const channel = new BroadcastChannel('applyr-target'); channel.postMessage('changed'); channel.close();
       void store().then((s) => s.read()).then(async (cp) => {
+        if (generation !== changeGeneration) return;
         const old = previous; previous = cp;
-        const cleanup = old && (!cp || old.id !== cp.id) ? old : cp && (terminal(cp) || cp.access?.status !== 'ready') ? cp : null;
+        const cleanup = old && (!cp || old.id !== cp.id) ? old : cp && (terminal(cp) || cp.access?.status !== 'ready' || cp.recovery?.inspectionRequired) ? cp : null;
         if (cleanup) {
-          const frameIds = [...new Set([0, ...(cleanup.attention?.items.flatMap((i) => i.target ? [i.target.frameId] : []) ?? [])])];
-          for (const frameId of frameIds) await browser.tabs.sendMessage(cleanup.target.tabId, { channel: 'clear-applyr-markers' }, { frameId }).catch(() => {});
+          const contexts = [cleanup, ...(old?.id === cleanup.id ? [old] : [])];
+          const frameIds = [...new Set([0, ...contexts.flatMap((s) => [...s.attention?.items.flatMap((i) => i.target ? [i.target.frameId] : []) ?? [], ...s.review?.items.map((i) => i.target.frameId) ?? []])])];
+          await browser.tabs.sendMessage(cleanup.target.tabId, { channel: 'clear-applyr-markers' }).catch(() => {});
           await browser.scripting.executeScript({ target: { tabId: cleanup.target.tabId, frameIds }, world: 'ISOLATED', func: markAttention, args: [null, [], false] }).catch(() => {});
         }
-        await alerts?.refresh(cp);
+        if (generation === changeGeneration) await alerts?.refresh(cp);
       }).catch(() => {});
     };
     const access = new PageAccessService({
@@ -108,7 +115,8 @@ export default defineBackground({
       },
     });
     const ai = new AiService(getDatabase, providers, autofill, changed);
-    onProfileDeletion(() => ai.discard());
+    onProfileDeletion(() => { ai.discard(); autofill.invalidate(); changed(); });
+    onDocumentChange((deleted) => { if (deleted) { ai.discard(); autofill.invalidate(); changed(); } });
     const handleAi = aiHandler(ai, browser.runtime.id, [browser.runtime.getURL(branding.pages.session), browser.runtime.getURL(branding.pages.options)]);
     const handle = createCoordinator({
       extensionId: browser.runtime.id,
@@ -118,6 +126,31 @@ export default defineBackground({
         options: browser.runtime.getURL(branding.pages.options),
       },
       store, target, access, autofill, attention, changed, discardAi: () => ai.discard(),
+      deleteData: async (scope) => {
+        ai.discard(); autofill.invalidate();
+        if (scope === 'all') {
+          // Revocation invalidates pending probes/dispatch before clearing keys.
+          providers.revokePermissions();
+          for (const provider of ['openai', 'claude', 'gemini'] as const) await providers.execute({ channel: 'providers', schemaVersion: 1, requestId: crypto.randomUUID(), type: 'REMOVE_KEY', provider, revision: 0 });
+          await providers.fenceReset();
+        }
+        await deleteLocalData(await getDatabase(), scope);
+        const resetChannel = new BroadcastChannel('applyr-data-reset'); resetChannel.postMessage(scope); resetChannel.close();
+        if (scope === 'profile' || scope === 'all') notifyProfileDeletion();
+        if (scope === 'history' || scope === 'all') notifyDocumentChange(true);
+        if (scope === 'all') {
+          await alerts.refresh(null);
+          await browser.storage.session.clear(); await browser.storage.local.clear();
+          const grants = await browser.permissions.getAll(), manifest = browser.runtime.getManifest();
+          if (grants.permissions?.includes('notifications') && typeof browser.notifications?.getAll === 'function') for (const id of Object.keys(await browser.notifications.getAll())) await browser.notifications.clear(id);
+          const optionalOrigins = (grants.origins ?? []).filter((origin) => !manifest.host_permissions?.includes(origin));
+          if (optionalOrigins.length) await browser.permissions.remove({ origins: optionalOrigins });
+          const optionalData = (grants as { data_collection?: string[] }).data_collection?.filter((c) => ['websiteContent', 'authenticationInfo'].includes(c)) ?? [];
+          if (optionalData.length) await browser.permissions.remove({ origins: [], ...{ data_collection: optionalData } });
+          if (grants.permissions?.includes('notifications') && !manifest.permissions?.includes('notifications')) await browser.permissions.remove({ permissions: ['notifications'] });
+        }
+        changed();
+      },
       now: Date.now,
       uuid: () => crypto.randomUUID(),
     });

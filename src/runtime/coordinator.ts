@@ -19,6 +19,7 @@ export interface CoordinatorDependencies {
   attention?: AttentionService;
   changed?: () => void;
   discardAi?: () => void;
+  deleteData?: (scope: 'profile' | 'history' | 'all') => Promise<void>;
 }
 
 export function createCoordinator(dependencies: CoordinatorDependencies) {
@@ -35,10 +36,20 @@ export function createCoordinator(dependencies: CoordinatorDependencies) {
       const store = await dependencies.store();
       let checkpoint: SessionCheckpoint | null = null;
       switch (message.type) {
+        case 'DELETE_DATA': {
+          if (page !== dependencies.pages.options || !dependencies.deleteData) return fail('FORBIDDEN');
+          const cp = await store.read();
+          if ((cp?.id ?? null) !== message.sessionId || (cp?.revision ?? null) !== message.revision) throw new StaleCheckpointError();
+          await dependencies.deleteData(message.scope); checkpoint = await store.read(); break;
+        }
+        case 'SHOW_REVIEW':
+          if (!dependencies.attention) return fail('ACCESS_UNAVAILABLE');
+          checkpoint = await dependencies.attention.show(message, undefined, message.fieldId); break;
         case 'ATTENTION_ANSWERS':
         case 'REINSPECT_ATTENTION': {
           if (!dependencies.attention) return fail('ACCESS_UNAVAILABLE');
           const result = message.type === 'ATTENTION_ANSWERS' ? await dependencies.attention.answers(message) : await dependencies.attention.reinspect(message, message.itemId);
+          result.checkpoint = await store.activity(result.checkpoint.id);
           return { schemaVersion: 1, requestId: message.requestId, ok: true, ...result };
         }
         case 'SHOW_ATTENTION':
@@ -63,8 +74,9 @@ export function createCoordinator(dependencies: CoordinatorDependencies) {
         case 'FINISH_SESSION':
         case 'REPORT_SUBMISSION':
         case 'FINAL_REVIEW': {
-          const cp = await store.read();
+          let cp = await store.read();
           if (!cp || cp.id !== message.sessionId || cp.revision !== message.revision) throw new StaleCheckpointError();
+          if (message.type === 'FINAL_REVIEW' && dependencies.attention) cp = (await dependencies.attention.reinspect(message)).checkpoint;
           if (message.type === 'FINAL_REVIEW' && cp.lifecycle !== 'READY_FOR_REVIEW') throw new Error('ACCESS_UNAVAILABLE');
           const event = message.type === 'FINISH_SESSION' ? { type: 'FINISH' as const } : message.type === 'FINAL_REVIEW' ? { type: 'REVIEW' as const, scope: 'final_review' as const } : { type: 'REPORT_SUBMISSION' as const };
           const next = transition(cp, event, dependencies.now());
@@ -83,6 +95,7 @@ export function createCoordinator(dependencies: CoordinatorDependencies) {
           if (!dependencies.access) return fail('ACCESS_UNAVAILABLE');
           const result = await dependencies.access.inspect(message, message.frameOrigin, message.frameIdentity, message.selection);
           if (dependencies.attention) result.checkpoint = await dependencies.attention.observe(result.checkpoint, result.inspection);
+          result.checkpoint = await store.activity(result.checkpoint.id);
           return { schemaVersion: 1, requestId: message.requestId, ok: true, ...result };
         }
         case 'GET_STATE': {
@@ -104,6 +117,7 @@ export function createCoordinator(dependencies: CoordinatorDependencies) {
           let target: TargetReference;
           try { target = await dependencies.target(message.tabId); }
           catch { return fail('TAB_UNAVAILABLE'); }
+          await store.assertNewRun(target.url, message.separateRun);
           dependencies.discardAi?.();
           const next = createCheckpoint(target, dependencies.uuid(), dependencies.now());
           if (dependencies.access) next.access = initialAccess(target);
@@ -129,13 +143,14 @@ export function createCoordinator(dependencies: CoordinatorDependencies) {
           checkpoint = await dependencies.access.edit(message, message.role, message.company); break;
         case 'OPEN_APPLICATION':
           if (!dependencies.access) return fail('ACCESS_UNAVAILABLE');
-          dependencies.discardAi?.(); checkpoint = await dependencies.access.open(message, message.url); break;
+          dependencies.discardAi?.(); checkpoint = await dependencies.access.open(message, message.url, message.separateRun); break;
       }
+      if (checkpoint && !['GET_STATE', 'DELETE_DATA', 'START_AUTOFILL'].includes(message.type)) checkpoint = await store.activity(checkpoint.id);
       if (message.type !== 'GET_STATE') dependencies.changed?.();
       return { schemaVersion: 1, requestId: message.requestId, ok: true, checkpoint };
     } catch (error) {
       if (error instanceof StaleCheckpointError) return fail('STALE_CHECKPOINT');
-      if (error instanceof Error && ['INVALID_URL', 'TAB_UNAVAILABLE', 'ACCESS_UNAVAILABLE'].includes(error.message)) return fail(error.message as 'INVALID_URL' | 'TAB_UNAVAILABLE' | 'ACCESS_UNAVAILABLE');
+      if (error instanceof Error && ['INVALID_URL', 'TAB_UNAVAILABLE', 'ACCESS_UNAVAILABLE', 'DUPLICATE_APPLICATION'].includes(error.message)) return fail(error.message as 'INVALID_URL' | 'TAB_UNAVAILABLE' | 'ACCESS_UNAVAILABLE' | 'DUPLICATE_APPLICATION');
       return fail('STORAGE_UNAVAILABLE');
     }
   };

@@ -1,9 +1,10 @@
 import type { IDBPDatabase } from 'idb';
+import { observeReview } from '../review';
 import type { ApplyrDatabase } from '../storage/database';
 import { CheckpointStore, StaleCheckpointError } from '../storage/checkpoints';
 import { ProfileStore } from '../storage/profiles';
 import type { PageAccessService } from '../runtime/page-access';
-import { transition, terminal, type SessionCheckpoint } from '../domain/session';
+import { transition, terminal, reviewReady, type SessionCheckpoint } from '../domain/session';
 import type { SessionCorrection } from '../mapping/schema';
 import type { Inspection } from '../forms/schema';
 import { createDryRun, previewBinding } from '../mapping/rules';
@@ -25,10 +26,12 @@ export class AttentionService {
     if (terminal(cp)) return cp;
     const db = await this.deps.database(), input = (await new ProfileStore(db).read()).snapshot;
     const attention = await inspectionQueue(cp, inspection, input?.sessionId === cp.id ? input : null);
+    const review = cp.autofill ? await observeReview(cp, inspection) : undefined;
     let next = cp;
-    if (JSON.stringify(cp.attention) !== JSON.stringify(attention)) {
+    if (JSON.stringify(cp.attention) !== JSON.stringify(attention) || JSON.stringify(cp.review) !== JSON.stringify(review)) {
       const gate = inspection.snapshot.unsupported.some((i) => ['login', 'otp', 'captcha', 'authentication'].includes(i.code));
-      next = { ...(gate ? transition(cp, { type: 'INTERRUPT', reason: 'manual_challenge' }, Date.now()) : { ...cp, revision: cp.revision + 1, updatedAt: Date.now() }), attention };
+      next = { ...(gate ? transition(cp, { type: 'INTERRUPT', reason: 'manual_challenge' }, Date.now()) : { ...cp, revision: cp.revision + 1, updatedAt: Date.now() }), attention, review, autofill: cp.autofill && review ? { ...cp.autofill, requiredUnresolved: review.items.filter((i) => i.required && !['accepted', 'manual'].includes(i.status)).length, unsupported: review.areas.reduce((n, a) => n + a.unsupported, 0) } : undefined };
+      if (next.reviewScope === 'final_review' && !reviewReady(next)) next.reviewScope = undefined;
       await new CheckpointStore(db).replace(next, { sessionId: cp.id, revision: cp.revision });
       this.deps.changed();
     }
@@ -84,13 +87,13 @@ export class AttentionService {
     await new CheckpointStore(await this.deps.database()).replace(next, message); this.deps.changed();
     return { checkpoint: next, inspection };
   }
-  async show(b: Binding, itemId?: string) {
+  async show(b: Binding, itemId?: string, fieldId?: string) {
     const cp = await this.current(b);
     const verified = await this.deps.access.verify(cp);
     if (verified.revision !== cp.revision || cp.recovery?.reattachRequired || !cp.target.identity || !cp.target.origin) throw new Error('ACCESS_UNAVAILABLE');
-    if (itemId) {
+    if (itemId || fieldId) {
       const item = cp.attention?.items.find((i) => i.id === itemId && pending(i));
-      const t = item?.target;
+      const t = item?.target ?? cp.review?.items.find((i) => i.fieldId === fieldId)?.target;
       if (!t || t.tabId !== cp.target.tabId || (t.frameId !== 0 && !cp.access?.frames.some((f) => f.identity === t.identity))) throw new Error('ACCESS_UNAVAILABLE');
       const frame = t.frameId ? cp.access?.frames.find((f) => f.identity === t.identity) : undefined;
       const { inspection } = await this.deps.access.inspect(b, frame?.origin, frame?.identity);

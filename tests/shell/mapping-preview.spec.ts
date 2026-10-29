@@ -1,3 +1,4 @@
+function immutableInput(value: unknown) { return Object.fromEntries(Object.entries(value as Record<string, unknown>).filter(([key]) => !['expiresAt', 'lastActivityAt'].includes(key))); }
 import { expect, type Page } from '@playwright/test';
 import type { browser } from 'wxt/browser';
 import { test } from '../fixtures/inspection-extension';
@@ -37,7 +38,7 @@ test('packaged dry-run F01 counts, source paths, session correction, reviewed de
   await importProfile(session, profile); await session.getByRole('button', { name: 'Freeze profile for this session', exact: true }).click();
   await expect(session.getByTestId('frozen-profile-state')).toBeVisible();
   await session.evaluate(() => chrome.storage.session.set({ providerCredentialCanary: 'PROVIDER_SECRET_MAPPING_CANARY' }));
-  const before = await source.content(); const frozen = await savedData(session, 'snapshot');
+  const before = await source.content(); const frozen = immutableInput(await savedData(session, 'snapshot'));
   await session.getByRole('button', { name: 'Inspect fields', exact: true }).click();
   const counts = session.getByTestId('mapping-counts');
   await expect(counts).toHaveText('21 inspected · 5 proposed · 2 skipped · 0 missing answers · 10 need review · 4 unsupported fields · 0 unsupported areas');
@@ -52,7 +53,7 @@ test('packaged dry-run F01 counts, source paths, session correction, reviewed de
   const email = await correction(session, 'Email', 'session-only@example.test');
   await email.getByRole('button', { name: 'Use for this application preview' }).click();
   await expect(email.getByTestId('proposed-value')).toHaveText('session-only@example.test');
-  expect(await savedData(session, 'snapshot')).toEqual(frozen);
+  expect(immutableInput(await savedData(session, 'snapshot'))).toEqual(frozen);
   expect(JSON.stringify(await savedData(session, 'default'))).not.toContain('session-only@example.test');
   await email.getByRole('button', { name: 'Propose profile update', exact: true }).click();
   const diff = session.getByLabel('Reviewed profile update', { exact: true });
@@ -60,7 +61,7 @@ test('packaged dry-run F01 counts, source paths, session correction, reviewed de
   await expect(diff.getByRole('button', { name: 'Save reviewed profile update' })).toBeDisabled();
   await diff.getByLabel('I reviewed this default-profile diff').check(); await diff.getByRole('button', { name: 'Save reviewed profile update' }).click();
   await expect(diff).toHaveCount(0);
-  expect(JSON.stringify(await savedData(session, 'default'))).toContain('session-only@example.test'); expect(await savedData(session, 'snapshot')).toEqual(frozen);
+  expect(JSON.stringify(await savedData(session, 'default'))).toContain('session-only@example.test'); expect(immutableInput(await savedData(session, 'snapshot'))).toEqual(frozen);
   await expect(session.getByTestId('mapping-input')).toContainText((frozen as { version: string }).version);
   // A fresh inspection discards the view-only correction; saved edits do not
   // rewrite the running frozen input.

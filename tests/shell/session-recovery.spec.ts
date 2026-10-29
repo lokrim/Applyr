@@ -48,8 +48,9 @@ test('F10 actual popup closure, tab switch, safe pause, reinspection, final scop
   await expect(source.getByLabel('Phone', { exact: true })).toHaveValue('');
   await request(session, await startData(session)); cp = await current(session);
   expect(cp.lifecycle).toBe('READY_FOR_REVIEW'); expect(cp.reviewScope).toBe('current_step'); expect(cp.submission.status).toBe('unknown');
-  await request(session, { type: 'FINAL_REVIEW', sessionId: cp.id, revision: cp.revision }); cp = await current(session);
-  expect(cp.reviewScope).toBe('final_review');
+  const blockedFinal = await session.evaluate((cp) => chrome.runtime.sendMessage({ schemaVersion: 1, requestId: crypto.randomUUID(), type: 'FINAL_REVIEW', sessionId: cp.id, revision: cp.revision }), cp);
+  expect(blockedFinal).toMatchObject({ ok: false, code: 'ACCESS_UNAVAILABLE' }); cp = await current(session);
+  expect(cp.reviewScope).toBe('current_step');
   await request(session, { type: 'FINISH_SESSION', sessionId: cp.id, revision: cp.revision }); cp = await current(session);
   expect(cp.lifecycle).toBe('AUTOFILL_FINISHED'); expect(cp.submission.status).toBe('unknown');
   await request(session, { type: 'REPORT_SUBMISSION', sessionId: cp.id, revision: cp.revision }); cp = await current(session);
@@ -107,10 +108,10 @@ test('F10 reload, same/cross-origin navigation, target closure and job switching
   cp = await current(session); await request(session, { type: 'REATTACH_SESSION', sessionId: cp.id, revision: cp.revision, tabId });
   cp = await current(session); expect(cp.id).toBe(saved.id); expect(cp.recovery?.inspectionRequired).toBe(true); await expect(matching.getByLabel('Email', { exact: true })).toHaveValue('');
   await request(session, { type: 'PAUSE_SESSION', sessionId: cp.id, revision: cp.revision }); cp = await current(session);
-  await request(popup, { type: 'CAPTURE_TARGET', tabId, sessionId: cp.id, revision: cp.revision });
+  await request(popup, { type: 'CAPTURE_TARGET', separateRun: true, tabId, sessionId: cp.id, revision: cp.revision });
   const next = await current(session); expect(next.id).not.toBe(saved.id);
   const restored = (await request(session, { type: 'RESTORE_SESSION', sessionId: next.id, revision: next.revision, archivedId: saved.id })).checkpoint as SessionCheckpoint;
-  expect(restored.lifecycle).toBe('PAUSED'); expect(restored.autofill?.operations).toEqual(saved.autofill?.operations); expect(restored.recovery?.reattachRequired).toBe(true);
+  expect(restored.lifecycle).toBe('PAUSED'); expect(restored.autofill?.operations.map((o) => ({ id: o.id, result: o.result }))).toEqual(saved.autofill?.operations.map((o) => ({ id: o.id, result: o.result }))); expect(restored.autofill?.operations.every((o) => !o.recovery)).toBe(true); expect(restored.recovery?.reattachRequired).toBe(true);
   await expect(matching.getByLabel('Email', { exact: true })).toHaveValue('');
   await info.attach('F10-navigation-jobs', { body: JSON.stringify({ browser: context.browser()!.version(), saved, restored }), contentType: 'application/json' });
 });

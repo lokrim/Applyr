@@ -4,6 +4,7 @@ import { RequestSchema, ResponseSchema, type Request } from './schemas';
 type WithoutEnvelope<T> = T extends Request ? Omit<T, 'schemaVersion' | 'requestId'> : never;
 export type Intent = WithoutEnvelope<Request>;
 const errors = {
+  DUPLICATE_APPLICATION: 'This application already has local history. View it, resume its saved session, or deliberately start a separate run.',
   FORBIDDEN: 'This page cannot access the checkpoint.',
   INVALID_MESSAGE: 'The extension received an unsupported request. Reload the extension UI.',
   STALE_CHECKPOINT: 'The checkpoint changed in another window or expired. Refresh before trying again.',

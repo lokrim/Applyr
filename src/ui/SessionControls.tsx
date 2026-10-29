@@ -1,3 +1,4 @@
+import { reviewReady } from '../domain/session';
 import { pending } from '../attention/queue';
 import { useEffect, useState } from 'react';
 import { browser } from 'wxt/browser';
@@ -40,12 +41,12 @@ export function SessionControls({ checkpoint: cp, onChange }: { checkpoint: Sess
       {!terminal(cp) && (cp.lifecycle === 'PAUSED' || cp.recovery?.inspectionRequired) && <button disabled={busy || cp.recovery?.reattachRequired || cp.access?.status !== 'ready'} onClick={() => void action('RESUME_SESSION')}>Resume and reinspect</button>}
       {!terminal(cp) && <button disabled={busy} onClick={() => void action('CANCEL_SESSION')}>Cancel session</button>}
       {cp.lifecycle === 'READY_FOR_REVIEW' && <>
-        {cp.reviewScope !== 'final_review' && <button disabled={busy} onClick={() => void action('FINAL_REVIEW')}>I am reviewing the final step</button>}
+        {cp.reviewScope !== 'final_review' && <button disabled={busy || !reviewReady(cp)} onClick={() => void action('FINAL_REVIEW')}>I am reviewing the final step</button>}
         <button disabled={busy} onClick={() => void action('FINISH_SESSION')}>Finish autofill session</button>
       </>}
       {cp.submission.status === 'unknown' && <button disabled={busy} onClick={() => void action('REPORT_SUBMISSION')}>I submitted it</button>}
     </div>
-    <p>Submission: {cp.submission.status === 'reported_by_user' ? 'reported by you; not independently confirmed' : 'unknown'}. You control Next and submission on the website.</p>
+    <p>Submission: {cp.submission.status === 'reported_by_user' ? `reported by you at ${new Date(cp.submission.reportedAt!).toLocaleString()} (source: user); not independently confirmed` : 'unknown'}. You control Next and submission on the website.</p>
     <p>Pause stops at a safe boundary. Cancel stops future work; already delivered values, uploads and provider requests cannot be recalled.</p>
     {!!archived.length && <details><summary>Other saved sessions</summary>{archived.map((old) => <p key={old.id}>{old.target.role ?? old.target.origin} · {old.lifecycle.toLowerCase()} · {old.autofill?.operations.filter((o) => o.result?.status === 'accepted').length ?? 0} accepted · {old.attention?.items.filter(pending).length ?? 0} attention items <button disabled={busy || terminal(old)} onClick={() => void run(() => sendIntent({ type: 'RESTORE_SESSION', sessionId: cp.id, revision: cp.revision, archivedId: old.id }))}>Recover saved session</button></p>)}</details>}
     {error && <p role="alert">{error}</p>}

@@ -1,7 +1,7 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 
 export const DATABASE_NAME = 'applyr-local';
-export const DATABASE_VERSION = 4;
+export const DATABASE_VERSION = 5;
 export interface ApplyrDatabase extends DBSchema {
   // Unknown on disk: every read must cross the runtime schema boundary.
   checkpoints: { key: string; value: unknown };
@@ -11,6 +11,7 @@ export interface ApplyrDatabase extends DBSchema {
   documentLinks: { key: string; value: unknown };
   providerSettings: { key: string; value: unknown };
   providerCredentials: { key: string; value: unknown };
+  history: { key: string; value: unknown };
 }
 
 export function openDatabase(name = DATABASE_NAME): Promise<IDBPDatabase<ApplyrDatabase>> {
@@ -28,6 +29,7 @@ export function openDatabase(name = DATABASE_NAME): Promise<IDBPDatabase<ApplyrD
         database.createObjectStore('providerSettings');
         database.createObjectStore('providerCredentials');
       }
+      if (oldVersion < 5) database.createObjectStore('history');
     },
     blocking() { void connection.then((database) => database.close()); },
     terminated() { databasePromise = undefined; },

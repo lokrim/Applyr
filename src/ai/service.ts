@@ -39,7 +39,8 @@ export class AiService {
         // No evidence means an explicit local question, never a speculative paid request.
         if (context.fields.some((f) => !f.evidence.length)) throw new ProviderFailure('invalid_request');
         const store = new CheckpointStore(db);
-        const preparing = { ...transition(cp, { type: 'START', lease: { owner: this.autofill.owner, token: request.requestId, application: cp.target.identity ?? '', expiresAt: Date.now() + LEASE_MS } }, Date.now()), phase: 'PREPARING' as const, aiRequest: { id: request.requestId, status: 'pending' as const, inputVersion: input.version } };
+        const providerView = await this.providers.execute({ channel: 'providers', schemaVersion: 1, requestId: crypto.randomUUID(), type: 'STATUS', provider: request.provider });
+        const preparing = { ...transition(cp, { type: 'START', lease: { owner: this.autofill.owner, token: request.requestId, application: cp.target.identity ?? '', expiresAt: Date.now() + LEASE_MS } }, Date.now()), phase: 'PREPARING' as const, providers: [...cp.providers ?? [], { provider: request.provider, model: providerView.config.model }].slice(-100), providerError: undefined, aiRequest: { id: request.requestId, status: 'pending' as const, inputVersion: input.version } };
         preparing.providerRequests = [...cp.providerRequests ?? [], preparing.aiRequest];
         await store.replace(preparing, { sessionId: cp.id, revision: cp.revision });
         durable = { sessionId: cp.id, previous: cp };
@@ -50,7 +51,7 @@ export class AiService {
         const latest = (await new ProfileStore(db).read()).snapshot, current = await new CheckpointStore(db).read();
         if (controller.signal.aborted || latest?.version !== input.version || current?.id !== cp.id || current.revision !== preparing.revision || current.lifecycle !== 'RUNNING' || current.pauseRequested) throw new ProviderFailure('stale');
         const review: ReviewBatch = { id: crypto.randomUUID(), binding: previewBinding(request.inspection, input), context, proposals: validateProposals({ scope: context.scope, revision: context.revision, proposals: result.proposals }, context), model: result.model, provider: request.provider };
-        const completed = { ...current, revision: current.revision + 1, updatedAt: Date.now(), lifecycle: cp.lifecycle, phase: cp.phase, lease: undefined, providerRequests: current.providerRequests?.map((r) => r.id === request.requestId ? { ...r, status: 'completed' as const } : r), aiRequest: { ...preparing.aiRequest, status: 'completed' as const } };
+        const completed = { ...current, providers: [...(current.providers ?? []), { provider: request.provider, model: result.model }].slice(-100), revision: current.revision + 1, updatedAt: Date.now(), lifecycle: cp.lifecycle, phase: cp.phase, lease: undefined, providerRequests: current.providerRequests?.map((r) => r.id === request.requestId ? { ...r, status: 'completed' as const } : r), aiRequest: { ...preparing.aiRequest, status: 'completed' as const } };
         const questions = review.context.fields.filter((f) => review.proposals.some((p) => p.fieldId === f.id));
         completed.attention = draftQueue(completed, review.id, questions);
         await store.replace(completed, { sessionId: cp.id, revision: current.revision }); durable = null;
@@ -61,7 +62,7 @@ export class AiService {
         if (durable) {
           const store = new CheckpointStore(await this.database()), cp = await store.read();
           if (cp?.id === durable.sessionId && cp.lease?.token === request.requestId && cp.aiRequest?.id === request.requestId && cp.aiRequest.status === 'pending') {
-            await store.replace({ ...cp, revision: cp.revision + 1, updatedAt: Date.now(), lifecycle: durable.previous.lifecycle, phase: durable.previous.phase, reviewScope: durable.previous.reviewScope, lease: undefined, recovery: { reason: 'provider_request_uncertain', inspectionRequired: false, reattachRequired: false }, providerRequests: cp.providerRequests?.map((r) => r.id === request.requestId ? { ...r, status: 'uncertain' as const } : r), aiRequest: { ...cp.aiRequest, status: 'uncertain' } }, { sessionId: cp.id, revision: cp.revision });
+            await store.replace({ ...cp, revision: cp.revision + 1, providerError: e instanceof ProviderFailure ? e.code : 'invalid_output', updatedAt: Date.now(), lifecycle: durable.previous.lifecycle, phase: durable.previous.phase, reviewScope: durable.previous.reviewScope, lease: undefined, recovery: { reason: 'provider_request_uncertain', inspectionRequired: false, reattachRequired: false }, providerRequests: cp.providerRequests?.map((r) => r.id === request.requestId ? { ...r, status: 'uncertain' as const } : r), aiRequest: { ...cp.aiRequest, status: 'uncertain' } }, { sessionId: cp.id, revision: cp.revision });
           }
         }
         throw e;
@@ -78,7 +79,7 @@ export class AiService {
       if (d.action === 'reject') return [];
       const edited = p.operation === 'map_fact' ? { ...p, factRefs: [d.factRef ?? p.factRefs[0]!], optionId: d.optionId ?? p.optionId } : p;
       validateProposals({ scope: saved.review.context.scope, revision: saved.review.context.revision, proposals: saved.review.proposals.map((proposal) => proposal.fieldId === p.fieldId ? edited : proposal) }, saved.review.context);
-      return [{ fieldId: p.fieldId, value: valueFor(edited, saved.review.context, d.text) }];
+      return [{ fieldId: p.fieldId, approvedDraft: p.operation === 'draft_answer', value: valueFor(edited, saved.review.context, d.text) }];
     });
     // Consume BEFORE awaiting insertion: duplicate decisions never replay a write.
     this.batch = null;

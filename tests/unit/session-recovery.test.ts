@@ -8,6 +8,10 @@ import { CheckpointStore, StaleCheckpointError } from '../../src/storage/checkpo
 
 const id = () => crypto.randomUUID(), identity = 'a'.repeat(64);
 const cp = () => createCheckpoint({ tabId: 7, windowId: 1, origin: 'https://jobs.test', identity, availability: 'https' }, id(), 1000);
+function ready(s: ReturnType<typeof cp>) {
+  const fieldId = id(), document = id();
+  return { ...s, access: { status: 'ready' as const, classification: 'application' as const, reason: 'application' as const, frames: [] }, autofill: { id: id(), inputVersion: id(), status: 'review' as const, operations: [], requiredUnresolved: 0, unsupported: 0 }, review: { at: 2000, areas: [], items: [{ fieldId, label: 'Email', required: true, upload: false, approvedDraft: false, status: 'manual' as const, fingerprint: identity, target: { tabId: 7, frameId: 0, browserDocumentId: null, identity, document, revision: 1, formId: null, fieldId, signature: identity } }] } };
+}
 const lease = () => ({ owner: id(), token: id(), application: identity, expiresAt: 2000 + LEASE_MS });
 let db: IDBPDatabase<ApplyrDatabase>;
 afterEach(async () => { if (db) { const name = db.name; db.close(); await deleteDB(name); } });
@@ -19,7 +23,7 @@ describe('F10 pure lifecycle', () => {
     s = transition(s, { type: 'PHASE', phase: 'VALIDATING' }, 2001);
     s = transition(s, { type: 'REVIEW' }, 2002);
     expect(s).toMatchObject({ lifecycle: 'READY_FOR_REVIEW', phase: 'VALIDATING', reviewScope: 'current_step', submission: { status: 'unknown' } });
-    s = transition(s, { type: 'REVIEW', scope: 'final_review' }, 2003);
+    s = transition(ready(s), { type: 'REVIEW', scope: 'final_review' }, 2003);
     s = transition(s, { type: 'FINISH' }, 2004);
     expect(s.lifecycle).toBe('AUTOFILL_FINISHED'); expect(s.submission.status).toBe('unknown');
     s = transition(s, { type: 'REPORT_SUBMISSION' }, 2005);
@@ -60,7 +64,7 @@ describe('F10 durable fencing and recovery', () => {
     const { store, initial } = await setup(); const running = transition(initial, { type: 'START', lease: lease() }, 2000);
     await store.replace(running, { sessionId: initial.id, revision: 0 });
     const expired = await new CheckpointStore(db, () => 2000 + LEASE_MS).read();
-    expect(expired).toMatchObject({ lifecycle: 'NEEDS_ATTENTION', recovery: { reason: 'lease_expired', inspectionRequired: true }, expiresAt: initial.expiresAt });
+    expect(expired).toMatchObject({ lifecycle: 'NEEDS_ATTENTION', recovery: { reason: 'lease_expired', inspectionRequired: true }, expiresAt: running.expiresAt });
     expect(expired?.lease).toBeUndefined();
   });
   it('new worker fences old in-memory authority and marks paid intent uncertain', async () => {
@@ -102,7 +106,7 @@ it('F10 a restored session can be cancelled before attachment and terminal input
 });
 
 it('F10 interruption clears stale final-step scope but preserves the independent user submission report', () => {
-  let s = transition(cp(), { type: 'REVIEW', scope: 'final_review' }, 2000);
+  let s = transition(ready(cp()), { type: 'REVIEW', scope: 'final_review' }, 2000);
   s = transition(s, { type: 'REPORT_SUBMISSION' }, 2001);
   s = transition(s, { type: 'INTERRUPT', reason: 'reload' }, 2002);
   expect(s.reviewScope).toBeUndefined(); expect(s.submission.status).toBe('reported_by_user');

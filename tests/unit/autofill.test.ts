@@ -282,3 +282,19 @@ it('F10 cancellation after reinspection cannot append a new intent or recovery v
   await s.service.start(s.request()); const cp = await s.store.read();
   expect(cp?.lifecycle).toBe('CANCELLED'); expect(cp?.autofill?.operations).toEqual([]); expect(s.dispatch).not.toHaveBeenCalled();
 });
+
+
+it('data deletion invalidation sends a strict clear command during transfer and cannot resurrect recovery', async () => {
+  const s = await setup([field({ label: 'Resume PDF', type: 'file', autocomplete: '', category: 'file', filePurpose: 'resume' })]);
+  const { DocumentStore } = await import('../../src/storage/documents');
+  const { deleteLocalData } = await import('../../src/storage/data-controls');
+  const docs = new DocumentStore(db);
+  const selected = await docs.start(s.inspection.sessionId, { source: 'replacement', file: new File(['%PDF-1.7\nfiction'], 'fictional.pdf', { type: 'application/pdf' }) }, null);
+  let release!: () => void; const waiting = new Promise<void>((r) => { release = r; }); const types: string[] = [];
+  s.dispatch.mockImplementation(async (command) => { ContentOperationSchema.parse(command); types.push(command.type); if (command.type === 'chunk') await waiting; return { ready: true }; });
+  const pending = s.service.start({ ...s.request(), revision: (await s.store.read())!.revision, resume: { id: selected.document.id, inputVersion: selected.document.inputVersion } });
+  await vi.waitFor(() => expect(types).toContain('chunk'));
+  s.service.invalidate(); await deleteLocalData(db, 'history');
+  await vi.waitFor(() => expect(types).toContain('clear')); release(); await pending.catch(() => {});
+  expect(types).not.toContain('commit'); expect(await s.store.read()).toBeNull(); expect(await db.getAll('history')).toEqual([]); expect((await docs.read()).document).toBeNull();
+});

@@ -103,3 +103,12 @@ footer p { font-size: 11px; margin: 4px 0; }
 .attention-queue .check-label { display: flex; align-items: flex-start; gap: 8px; }
 .attention-queue :is(input, select, summary):focus-visible { outline: 2px solid #b16421; outline-offset: 3px; }
 .attention-queue pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; font-size: 12px; }
+
+.help details { border-top: 1px solid #dce2d8; margin-top: 12px; padding-top: 12px; }
+.help summary { cursor: pointer; font-size: 14px; font-weight: 600; }
+.help nav { font-size: 13px; line-height: 2; }
+.duplicate-notice { border: 2px solid #ad652c; padding: 14px; margin: 14px 0; border-radius: 8px; }
+.duplicate-notice button, #history button { margin: 5px 5px 5px 0; }
+#history li, [aria-label="Field review list"] li { border-top: 1px solid #dce2d8; padding: 12px 0; overflow-wrap: anywhere; }
+:where(.help, #history, #privacy) a { color: #314d3e; text-decoration: underline; }
+:where(.help, #history, #privacy) :is(summary, a):focus-visible { outline: 2px solid #b16421; outline-offset: 3px; }

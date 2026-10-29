@@ -8,7 +8,7 @@ const labels = { openai: 'OpenAI', gemini: 'Gemini', claude: 'Claude' };
 const terms = { openai: 'https://developers.openai.com/api/docs/guides/your-data', gemini: 'https://ai.google.dev/gemini-api/terms', claude: 'https://platform.claude.com/docs/en/manage-claude/api-and-data-retention' };
 export function ProviderSettings() {
   const [provider, setProvider] = useState<Provider>('openai');
-  return <section className="card provider-workspace" aria-labelledby="provider-heading">
+  return <section id="providers" className="card provider-workspace" aria-labelledby="provider-heading">
     <h2 id="provider-heading">Optional AI providers</h2>
     <p>Deterministic autofill works without AI. API requests use your own provider account and may incur charges separately from a chat subscription.</p>
     <p>Keys stay in trusted browser session storage by default. Remember key stores a nonsynced copy in extension-origin IndexedDB. These stores are not encrypted vaults: browser-profile access, a compromised device or extension can expose keys. Providers warn against production browser-held secrets. Use only your own personal key.</p>

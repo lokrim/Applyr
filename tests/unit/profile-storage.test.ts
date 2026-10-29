@@ -34,7 +34,7 @@ describe('saved default / frozen session isolation in versioned IndexedDB', () =
     const checkpoint = createCheckpoint(target, id, now);
     await previous.put('checkpoints', checkpoint, 'current'); previous.close();
     database = await openDatabase(name);
-    expect(database.version).toBe(4); expect(await new CheckpointStore(database, () => now).read()).toEqual(checkpoint);
+    expect(database.version).toBe(5); expect(await new CheckpointStore(database, () => now).read()).toEqual(checkpoint);
     expect(await new ProfileStore(database, () => now).read()).toEqual({ saved: null, snapshot: null });
   });
 

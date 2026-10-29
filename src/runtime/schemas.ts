@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { ErrorCodeSchema } from '../providers/contracts';
+import { FieldReviewSchema } from '../review';
 import { AttentionSchema, AttentionAnswerSchema } from '../attention/schema';
 import type { SessionCheckpoint } from '../domain/session';
 import { parseApplicationUrl, sanitizedUrl } from '../browser/addresses';
@@ -48,7 +50,7 @@ export const CheckpointSchema: z.ZodType<SessionCheckpoint> = z.strictObject({
   access: AccessSchema.optional(),
   createdAt: integer,
   updatedAt: integer,
-  expiresAt: integer,
+  expiresAt: integer, lastActivityAt: integer.optional(),
   submission: z.strictObject({ status: z.enum(['unknown', 'reported_by_user']), reportedAt: integer.optional(), source: z.literal('user').optional() }).refine((s) => s.status === 'reported_by_user' ? s.reportedAt !== undefined && s.source === 'user' : s.reportedAt === undefined && s.source === undefined),
   reviewScope: z.enum(['current_step', 'final_review']).optional(), pauseRequested: z.boolean().optional(),
   recovery: z.strictObject({ reason: z.string().max(80), inspectionRequired: z.boolean(), reattachRequired: z.boolean() }).optional(),
@@ -56,8 +58,9 @@ export const CheckpointSchema: z.ZodType<SessionCheckpoint> = z.strictObject({
   aiRequest: z.strictObject({ id: uuid, status: z.enum(['pending', 'completed', 'uncertain']), inputVersion: uuid }).optional(),
   providerRequests: z.array(z.strictObject({ id: uuid, status: z.enum(['pending', 'completed', 'uncertain']), inputVersion: uuid })).max(100).optional(),
   approval: z.strictObject({ batchId: uuid, inputVersion: uuid, document: uuid, revision: integer, at: integer, decisions: z.array(z.strictObject({ fieldId: uuid, action: z.enum(['approve', 'reject']), text: z.string().max(2048) })).max(8) }).optional(),
+  review: FieldReviewSchema.optional(), providerError: ErrorCodeSchema.optional(), providers: z.array(z.strictObject({ provider: z.enum(['openai', 'claude', 'gemini']), model: z.string().max(160) })).max(100).optional(),
   autofill: AutofillSchema.optional(), attention: AttentionSchema.optional(),
-}).refine((record) => record.createdAt <= record.updatedAt && record.updatedAt < record.expiresAt && (record.lifecycle !== 'RUNNING' || record.phase !== 'SETUP'));
+}).refine((record) => record.createdAt <= record.updatedAt && record.updatedAt < record.expiresAt && (record.lastActivityAt === undefined || (record.lastActivityAt <= record.updatedAt && record.expiresAt - record.lastActivityAt <= 7 * 24 * 60 * 60 * 1000)) && (record.lifecycle !== 'RUNNING' || record.phase !== 'SETUP'));
 
 const envelope = { schemaVersion: z.literal(1), requestId: uuid };
 const binding = { sessionId: uuid.nullable(), revision: integer.nullable() };
@@ -73,18 +76,20 @@ export const RequestSchema = z.discriminatedUnion('type', [
   z.strictObject({ ...envelope, type: z.literal('FINAL_REVIEW'), sessionId: uuid, revision: integer }),
 
   z.strictObject({ ...envelope, type: z.literal('REATTACH_SESSION'), sessionId: uuid, revision: integer, tabId: integer }),
-  z.strictObject({ ...envelope, type: z.literal('RESTORE_SESSION'), sessionId: uuid, revision: integer, archivedId: uuid }),
+  z.strictObject({ ...envelope, type: z.literal('RESTORE_SESSION'), sessionId: uuid.nullable(), revision: integer.nullable(), archivedId: uuid }),
   z.strictObject({ ...envelope, type: z.literal('START_AUTOFILL'), sessionId: uuid, revision: integer, runId: uuid, inspection: InspectionSchema, inputVersion: uuid, corrections: z.array(SessionCorrectionSchema).max(100), resume: z.strictObject({ id: uuid, inputVersion: uuid }).nullable() }),
   z.strictObject({ ...envelope, type: z.literal('CANCEL_AUTOFILL'), sessionId: uuid, revision: integer, runId: uuid }),
+  z.strictObject({ ...envelope, type: z.literal('DELETE_DATA'), sessionId: uuid.nullable(), revision: integer.nullable(), scope: z.enum(['profile', 'history', 'all']) }),
+  z.strictObject({ ...envelope, type: z.literal('SHOW_REVIEW'), sessionId: uuid, revision: integer, fieldId: uuid }),
   z.strictObject({ ...envelope, type: z.literal('GET_STATE'), sessionId: z.null(), revision: z.null() }),
-  z.strictObject({ ...envelope, ...binding, type: z.literal('CAPTURE_TARGET'), tabId: integer }),
+  z.strictObject({ ...envelope, ...binding, type: z.literal('CAPTURE_TARGET'), tabId: integer, separateRun: z.literal(true).optional() }),
   z.strictObject({ ...envelope, type: z.literal('FORGET_CHECKPOINT'), sessionId: uuid, revision: integer }),
   z.strictObject({ ...envelope, type: z.literal('PROBE_TARGET'), sessionId: uuid, revision: integer, frameOrigin: origin.optional(), frameIdentity: z.string().regex(/^[a-f0-9]{64}$/).optional() })
     .refine((r) => (r.frameOrigin === undefined) === (r.frameIdentity === undefined)),
   z.strictObject({ ...envelope, type: z.literal('EDIT_TARGET'), sessionId: uuid, revision: integer, role: z.string().max(180), company: z.string().max(180) }),
   z.strictObject({ ...envelope, type: z.literal('INSPECT_FORM'), sessionId: uuid, revision: integer, frameOrigin: origin.optional(), frameIdentity: z.string().regex(/^[a-f0-9]{64}$/).optional(), selection: SelectionSchema.optional() })
     .refine((r) => (r.frameOrigin === undefined) === (r.frameIdentity === undefined)),
-  z.strictObject({ ...envelope, ...binding, type: z.literal('OPEN_APPLICATION'), url: z.string().max(4096) }),
+  z.strictObject({ ...envelope, ...binding, type: z.literal('OPEN_APPLICATION'), url: z.string().max(4096), separateRun: z.literal(true).optional() }),
 ]);
 export type Request = z.infer<typeof RequestSchema>;
 
@@ -94,7 +99,7 @@ export const ResponseSchema = z.discriminatedUnion('ok', [
   }),
   z.strictObject({
     schemaVersion: z.literal(1), requestId: uuid.nullable(), ok: z.literal(false),
-    code: z.enum(['FORBIDDEN', 'INVALID_MESSAGE', 'STALE_CHECKPOINT', 'TAB_UNAVAILABLE', 'STORAGE_UNAVAILABLE', 'INVALID_URL', 'ACCESS_UNAVAILABLE']),
+    code: z.enum(['FORBIDDEN', 'INVALID_MESSAGE', 'STALE_CHECKPOINT', 'TAB_UNAVAILABLE', 'STORAGE_UNAVAILABLE', 'INVALID_URL', 'ACCESS_UNAVAILABLE', 'DUPLICATE_APPLICATION']),
   }),
 ]);
 export type Response = z.infer<typeof ResponseSchema>;

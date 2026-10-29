@@ -74,6 +74,17 @@ test('real extension scoped probe, manual open, two jobs, frame denial, closure 
     await page.waitForLoadState('domcontentloaded'); return page;
   }
   const read = (page: Page) => page.evaluate(() => chrome.runtime.sendMessage({ schemaVersion: 1, requestId: crypto.randomUUID(), type: 'GET_STATE', sessionId: null, revision: null }));
+  // Tab load events may advance a checkpoint between two test messages. Retry
+  // only this explicit read-only probe, never a write, grant or finalization.
+  async function probeLatest(page: Page, extra: Record<string, string> = {}) {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const record = (await read(page)).checkpoint;
+      const result = await page.evaluate(({ record, extra }) => chrome.runtime.sendMessage({ schemaVersion: 1, requestId: crypto.randomUUID(), type: 'PROBE_TARGET', sessionId: record.id, revision: record.revision, ...extra }), { record, extra });
+      if (result.ok || result.code !== 'STALE_CHECKPOINT') return result;
+    }
+    throw new Error('Read-only fixture probe did not settle after tab events.');
+  }
+
   try {
     const source = await context.newPage(); await source.goto('https://jobs.applyr.test/apply?id=one&token=not-persisted');
     await source.bringToFront();
@@ -102,18 +113,21 @@ test('real extension scoped probe, manual open, two jobs, frame denial, closure 
     await source.bringToFront(); const secondPopup = await packaged('popup');
     await secondPopup.getByRole('button', { name: 'Use this tab', exact: true }).click();
     await expect(secondPopup.getByTestId('page-classification')).toHaveText('application');
-    expect((await read(secondPopup)).checkpoint.id).not.toBe(originalId);
+    await expect.poll(async () => (await read(secondPopup)).checkpoint.id).not.toBe(originalId);
     await expect(secondPopup.getByTestId('target-url')).toHaveText('https://jobs.applyr.test/apply?id=two');
 
     await secondPopup.getByLabel('Manual application URL').fill('https://jobs.applyr.test/frame');
     await secondPopup.getByRole('button', { name: 'Open application', exact: true }).click();
     await expect.poll(() => context.pages().some((p) => p.url() === 'https://jobs.applyr.test/frame')).toBe(true);
     await expect.poll(async () => (await read(secondPopup)).checkpoint.target.url).toBe('https://jobs.applyr.test/frame');
+    await expect(secondPopup.getByTestId('target-url')).toHaveText('https://jobs.applyr.test/frame');
+    await context.pages().find((p) => p.url() === 'https://jobs.applyr.test/frame')!.waitForLoadState('load');
     await secondPopup.getByRole('button', { name: 'Inspect bound page', exact: true }).click();
     await expect(secondPopup.getByTestId('page-classification')).toHaveText('uncertain');
     const framed = (await read(secondPopup)).checkpoint;
     expect(framed.access.frames).toHaveLength(1);
-    const denied = await secondPopup.evaluate((record) => chrome.runtime.sendMessage({ schemaVersion: 1, requestId: crypto.randomUUID(), type: 'PROBE_TARGET', sessionId: record.id, revision: record.revision, frameOrigin: 'https://embed.applyr.test', frameIdentity: record.access.frames[0].identity }), framed);
+    const denied = await probeLatest(secondPopup, { frameOrigin: 'https://embed.applyr.test', frameIdentity: framed.access.frames[0].identity });
+    expect(denied.ok).toBe(true);
     expect(denied.checkpoint.access.reason).toBe('frame_permission');
     expect(await secondPopup.evaluate(() => chrome.permissions.contains({ origins: ['https://embed.applyr.test/*'] }))).toBe(false);
     const frameTab = context.pages().find((p) => p.url() === 'https://jobs.applyr.test/frame')!;
@@ -126,8 +140,8 @@ test('real extension scoped probe, manual open, two jobs, frame denial, closure 
     const opened = await secondPopup.evaluate((record) => chrome.runtime.sendMessage({ schemaVersion: 1, requestId: crypto.randomUUID(), type: 'OPEN_APPLICATION', sessionId: record.id, revision: record.revision, url: 'https://unrelated.applyr.test/new-application' }), closed);
     expect(opened.ok).toBe(true);
     await expect.poll(() => context.pages().some((p) => p.url() === 'https://unrelated.applyr.test/new-application')).toBe(true);
-    const current = (await read(secondPopup)).checkpoint;
-    const inaccessible = await secondPopup.evaluate((record) => chrome.runtime.sendMessage({ schemaVersion: 1, requestId: crypto.randomUUID(), type: 'PROBE_TARGET', sessionId: record.id, revision: record.revision }), current);
+    const inaccessible = await probeLatest(secondPopup);
+    expect(inaccessible.ok).toBe(true);
     expect(inaccessible.checkpoint.access.reason).toBe('permission');
     expect(inaccessible.checkpoint.target.origin).toBe('https://unrelated.applyr.test');
     await expect(unrelated.locator('input')).toHaveValue('untouched');
@@ -140,6 +154,9 @@ test('real extension scoped probe, manual open, two jobs, frame denial, closure 
     await secondPopup.getByLabel('Manual application URL').fill('https://jobs.applyr.test/same-frame');
     await secondPopup.getByRole('button', { name: 'Open application', exact: true }).click();
     await expect.poll(async () => (await read(secondPopup)).checkpoint.target.url).toBe('https://jobs.applyr.test/same-frame');
+    await expect(secondPopup.getByTestId('target-url')).toHaveText('https://jobs.applyr.test/same-frame');
+    await expect.poll(() => context.pages().some((p) => p.url() === 'https://jobs.applyr.test/same-frame')).toBe(true);
+    await context.pages().find((p) => p.url() === 'https://jobs.applyr.test/same-frame')!.waitForLoadState('load');
     await secondPopup.getByRole('button', { name: 'Inspect bound page', exact: true }).click();
     await expect(secondPopup.getByTestId('page-classification')).toHaveText('uncertain');
     await secondPopup.getByRole('button', { name: 'Inspect frame at https://jobs.applyr.test', exact: true }).click();

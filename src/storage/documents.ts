@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { purgeHistory } from './history';
+import { ProfileSnapshotSchema } from './profiles';
 import type { IDBPDatabase, IDBPTransaction } from 'idb';
 import type { ApplyrDatabase } from './database';
 import type { DocumentRef } from '../domain/document';
@@ -6,7 +8,7 @@ import { RECOVERY_TTL_MS, terminal } from '../domain/session';
 import { CheckpointSchema } from '../runtime/schemas';
 import { DocumentError, MAX_PDF_BYTES, pdfDigest, selectPdf } from '../documents/pdf';
 
-export const LOCAL_STORES = ['checkpoints', 'profiles', 'documents', 'documentBlobs', 'documentLinks'] as const;
+export const LOCAL_STORES = ['checkpoints', 'profiles', 'documents', 'documentBlobs', 'documentLinks', 'history'] as const;
 type Transaction = IDBPTransaction<ApplyrDatabase, typeof LOCAL_STORES, 'readwrite'>;
 const uuid = z.string().uuid();
 const time = z.number().int().nonnegative();
@@ -26,6 +28,10 @@ export type DocumentSelection = { source: 'replacement'; file: File } | { source
 
 // Shared by checkpoint removal/replacement and document operations: atomic reference cleanup.
 export async function purgeDocumentRecords(tx: Transaction, sessionId: string | null, now: number) {
+  await purgeHistory(tx, now);
+  const rawProfile = await tx.objectStore('profiles').get('snapshot');
+  const profile = ProfileSnapshotSchema.safeParse(rawProfile);
+  if (rawProfile !== undefined && (!profile.success || profile.data.sessionId !== sessionId || profile.data.expiresAt <= now)) await tx.objectStore('profiles').delete('snapshot');
   const documents = tx.objectStore('documents');
   const blobs = tx.objectStore('documentBlobs');
   const links = tx.objectStore('documentLinks');
@@ -52,6 +58,20 @@ export async function purgeDocumentRecords(tx: Transaction, sessionId: string | 
     else retainedBlobs.add(ref.blobRef);
   }
   for (const key of await blobs.getAllKeys()) if (!retainedBlobs.has(key)) await blobs.delete(key);
+}
+
+// Renew only still-eligible inputs, in the same transaction as explicit activity.
+// Purge first so a legacy desynchronized expiry can never be revived.
+export async function renewSessionInputs(tx: Transaction, sessionId: string, at: number, expiresAt: number) {
+  await purgeDocumentRecords(tx, sessionId, at);
+  const profile = ProfileSnapshotSchema.safeParse(await tx.objectStore('profiles').get('snapshot'));
+  if (profile.success && profile.data.sessionId === sessionId) await tx.objectStore('profiles').put({ ...profile.data, expiresAt, lastActivityAt: at }, 'snapshot');
+  for (const key of await tx.objectStore('documents').getAllKeys()) {
+    const document = DocumentRefSchema.safeParse(await tx.objectStore('documents').get(key));
+    if (document.success && document.data.scope === 'session' && document.data.sessionId === sessionId) await tx.objectStore('documents').put({ ...document.data, expiresAt }, key);
+  }
+  const link = SessionSchema.safeParse(await tx.objectStore('documentLinks').get('session'));
+  if (link.success && link.data.sessionId === sessionId) await tx.objectStore('documentLinks').put({ ...link.data, expiresAt }, 'session');
 }
 
 function storageError(error: unknown): never {
@@ -163,7 +183,8 @@ export class DocumentStore {
       await tx.objectStore('documents').put(ref, ref.id);
       const session: DocumentSession = { schemaVersion: 1, sessionId, version: this.uuid(), documentId: ref.id, status: 'started', expiresAt: ref.expiresAt!, requiresReinspection: true };
       await links.put(session, 'session');
-      await tx.objectStore('checkpoints').put({ ...checkpoint, revision: checkpoint.revision + 1, updatedAt: this.now(), expiresAt: ref.expiresAt }, 'current');
+      await tx.objectStore('checkpoints').put({ ...checkpoint, revision: checkpoint.revision + 1, updatedAt: ref.expiresAt! - RECOVERY_TTL_MS, lastActivityAt: ref.expiresAt! - RECOVERY_TTL_MS, expiresAt: ref.expiresAt }, 'current');
+      await renewSessionInputs(tx, sessionId, ref.expiresAt! - RECOVERY_TTL_MS, ref.expiresAt!);
       await this.clean(tx);
       return { session, document: ref };
     });
@@ -184,12 +205,23 @@ export class DocumentStore {
     return this.transaction(async (tx) => {
       const ref = DocumentRefSchema.safeParse(await tx.objectStore('documents').get(id));
       if (!ref.success || ref.data.inputVersion !== inputVersion) throw new DocumentError('STALE');
+      const affectedSessions = new Set<string>();
       // Deliberate deletion invalidates all references to these same stored bytes, including shared saved/session refs.
       for (const key of await tx.objectStore('documents').getAllKeys()) {
         const other = DocumentRefSchema.safeParse(await tx.objectStore('documents').get(key));
-        if (other.success && other.data.blobRef === ref.data.blobRef) await tx.objectStore('documents').delete(key);
+        if (other.success && other.data.blobRef === ref.data.blobRef) { if (other.data.sessionId) affectedSessions.add(other.data.sessionId); await tx.objectStore('documents').delete(key); }
       }
       await tx.objectStore('documentBlobs').delete(ref.data.blobRef);
+      for (const key of await tx.objectStore('checkpoints').getAllKeys()) {
+        const p = CheckpointSchema.safeParse(await tx.objectStore('checkpoints').get(key));
+        if (!p.success) continue;
+        const cp = p.data;
+        if (!affectedSessions.has(cp.id) && !cp.autofill?.operations.some((o) => o.kind === 'upload' && o.recovery?.kind === 'file' && o.recovery.digest === ref.data.digest)) continue;
+        const next = terminal(cp) ? { ...cp, revision: cp.revision + 1 } : { ...cp, revision: cp.revision + 1, lifecycle: 'NEEDS_ATTENTION' as const, lease: undefined, reviewScope: undefined, recovery: { reason: 'document_deleted', inspectionRequired: true, reattachRequired: false } };
+        next.approval = undefined; next.review = undefined;
+        if (next.autofill) next.autofill = { ...next.autofill, status: next.autofill.status === 'running' ? 'interrupted' : next.autofill.status, operations: next.autofill.operations.map((o) => o.kind === 'upload' ? { ...o, recovery: undefined } : o) };
+        await tx.objectStore('checkpoints').put(next, key);
+      }
       await this.clean(tx);
     });
   }

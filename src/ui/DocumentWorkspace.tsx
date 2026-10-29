@@ -68,7 +68,7 @@ export function DocumentWorkspace({ surface, sessionId, onMutation }: { surface:
     setNotice(`Local session ${status}. Unsaved document and profile recovery copies were removed; deliberately saved defaults remain. This does not report an application submission.`);
   }
 
-  return <section className="card document-workspace" aria-labelledby="documents-heading">
+  return <section id="documents" className="card document-workspace" aria-labelledby="documents-heading">
     <h2 id="documents-heading">Resume PDF</h2>
     <p>Select one PDF up to 10 MiB. Basic extension, MIME and header checks are not malware scanning, proof of readability or employer acceptance. Empty browser MIME is allowed when the other checks pass.</p>
     <p className="muted">Original bytes and filename stay unchanged. applyr does not parse the resume or send it to AI. This resume is never implicitly used as a cover letter, portfolio or transcript.</p>
@@ -93,7 +93,7 @@ export function DocumentWorkspace({ surface, sessionId, onMutation }: { surface:
           });
         }} /></label>
         {draft && <div data-testid="pending-resume"><h3>{draft.selection.source === 'saved' ? 'Pending saved-default selection' : 'Pending per-session replacement'}</h3><DocumentDetails document={draft} /><p>The pending version is a preview. Start or replacement creates a new immutable session input version.</p><button className="text-button" disabled={busy} onClick={clearDraft}>Remove pending selection</button></div>}
-        <p>Before Start: a temporary local recovery copy will be bound to this session for at most seven days after explicit document selection at Start or replacement. Viewing it does not extend retention. Cancellation, finish and expiry remove unsaved copies. Expired data is ineligible immediately; a closed browser purges bytes when next opened. Local storage is not encrypted by applyr.</p>
+        <p>Before Start: a temporary local recovery copy will be bound to this session for at most seven days after your last explicit session activity. Viewing it does not extend retention. Cancellation, finish and expiry remove unsaved copies. Expired data is ineligible immediately; a closed browser purges bytes when next opened. Local storage is not encrypted by applyr.</p>
         <label className="reuse-choice"><input type="checkbox" checked={reuse} disabled={busy || !draft || draft.selection.source === 'saved'} onChange={(e) => setReuse(e.target.checked)} /> Save as reusable resume (optional; retained until you remove or replace the saved default)</label>
         {surface === 'options' ? <button disabled={busy || !draft || draft.selection.source !== 'replacement' || !reuse} onClick={() => void run(async () => {
           if (draft?.selection.source !== 'replacement') return;

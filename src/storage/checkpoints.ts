@@ -1,9 +1,10 @@
 import type { IDBPDatabase } from 'idb';
-import { transition, terminal, type SessionCheckpoint } from '../domain/session';
+import { HistoryStore, purgeHistory, saveHistory } from './history';
+import { RECOVERY_TTL_MS, transition, terminal, type SessionCheckpoint } from '../domain/session';
 import { CheckpointSchema } from '../runtime/schemas';
 import { ActionResultSchema, type ActionResult } from '../forms/operations';
 import type { ApplyrDatabase } from './database';
-import { LOCAL_STORES, purgeDocumentRecords } from './documents';
+import { LOCAL_STORES, purgeDocumentRecords, renewSessionInputs } from './documents';
 
 import { accessQueue } from '../attention/queue';
 const CURRENT = 'current';
@@ -12,8 +13,27 @@ export class StaleCheckpointError extends Error {}
 export class CheckpointStore {
   constructor(private readonly database: IDBPDatabase<ApplyrDatabase>, private readonly now = Date.now) {}
 
+  async assertNewRun(url: string | null | undefined, separateRun = false) {
+    if (!separateRun && (await new HistoryStore(this.database, this.now).duplicates(url)).length) throw new Error('DUPLICATE_APPLICATION');
+  }
+
+  async activity(id: string) {
+    const tx = this.database.transaction(LOCAL_STORES, 'readwrite');
+    await purgeHistory(tx, this.now());
+    const p = CheckpointSchema.safeParse(await tx.objectStore('checkpoints').get(CURRENT));
+    if (!p.success || p.data.id !== id) { await tx.done; throw new StaleCheckpointError(); }
+    const cp = p.data;
+    if (terminal(cp)) { await tx.done; return cp; }
+    const at = this.now(), expiresAt = at + RECOVERY_TTL_MS;
+    const next = { ...cp, revision: cp.revision + 1, updatedAt: at, lastActivityAt: at, expiresAt };
+    await tx.objectStore('checkpoints').put(next, CURRENT);
+    await renewSessionInputs(tx, id, at, expiresAt);
+    await saveHistory(tx, next); await tx.done; return next;
+  }
+
   async read(): Promise<SessionCheckpoint | null> {
     const transaction = this.database.transaction(LOCAL_STORES, 'readwrite');
+    await purgeHistory(transaction, this.now());
     const checkpoints = transaction.objectStore('checkpoints');
     const raw = await checkpoints.get(CURRENT);
     const parsed = CheckpointSchema.safeParse(raw);
@@ -39,6 +59,7 @@ export class CheckpointStore {
   async replace(next: SessionCheckpoint | null, expected: { sessionId: string | null; revision: number | null }) {
     if (next) { next = { ...next, attention: accessQueue(next) }; CheckpointSchema.parse(next); }
     const transaction = this.database.transaction(LOCAL_STORES, 'readwrite');
+    await purgeHistory(transaction, this.now());
     const checkpoints = transaction.objectStore('checkpoints');
     const raw = await checkpoints.get(CURRENT);
     const parsed = CheckpointSchema.safeParse(raw);
@@ -61,9 +82,18 @@ export class CheckpointStore {
       // restoring it always requires reselection and explicit reattachment.
       const archived = terminal(current) ? current : { ...transition(current, { type: 'INTERRUPT', reason: 'different_job', reattach: true }, this.now()), lifecycle: 'PAUSED' as const, autofill: current.autofill ? { ...current.autofill, status: 'paused' as const } : undefined };
       archived.approval = undefined;
+      archived.attention = undefined; archived.review = undefined;
+      if (archived.autofill) archived.autofill = { ...archived.autofill, operations: archived.autofill.operations.map((o) => ({ ...o, recovery: undefined })) };
       await checkpoints.put(archived, `paused:${current.id}`);
     }
-    if (next) await checkpoints.put(next, CURRENT);
+    if (next) {
+      await checkpoints.put(next, CURRENT);
+      await checkpoints.delete(`paused:${next.id}`);
+      if (next.lastActivityAt && next.lastActivityAt !== current?.lastActivityAt) {
+        await renewSessionInputs(transaction, next.id, next.lastActivityAt, next.expiresAt);
+      }
+      await saveHistory(transaction, next);
+    }
     else await checkpoints.delete(CURRENT);
     const ended = next && ['CANCELLED', 'AUTOFILL_FINISHED'].includes(next.lifecycle);
     if (!next || next.id !== current?.id || ended) await transaction.objectStore('profiles').delete('snapshot');
@@ -74,17 +104,24 @@ export class CheckpointStore {
 
   async recordResult(sessionId: string, runId: string, value: ActionResult) {
     const result = ActionResultSchema.parse(value);
-    const tx = this.database.transaction('checkpoints', 'readwrite');
-    const current = CheckpointSchema.safeParse(await tx.store.get(CURRENT));
+    const tx = this.database.transaction(LOCAL_STORES, 'readwrite');
+    await purgeHistory(tx, this.now());
+    const checkpoints = tx.objectStore('checkpoints');
+    const current = CheckpointSchema.safeParse(await checkpoints.get(CURRENT));
     const key = current.success && current.data.id === sessionId ? CURRENT : `paused:${sessionId}`;
-    const parsed = key === CURRENT ? current : CheckpointSchema.safeParse(await tx.store.get(key));
+    const parsed = key === CURRENT ? current : CheckpointSchema.safeParse(await checkpoints.get(key));
     const cp = parsed.success && parsed.data.expiresAt > this.now() ? parsed.data : null;
     const op = cp?.autofill?.id === runId ? cp.autofill.operations.find((o) => o.id === result.operationId && o.fieldId === result.fieldId) : undefined;
     // Exactly one result can resolve an intent. Duplicate/stale responses cannot
     // overwrite an accepted observation, revive execution or affect another job.
     if (cp?.autofill && op && !op.result) {
-      const next = { ...cp, revision: cp.revision + 1, updatedAt: this.now(), autofill: { ...cp.autofill, operations: cp.autofill.operations.map((o) => o.id === op.id ? { ...o, result } : o) } };
-      await tx.store.put(next, key);
+      const review = cp.review ? { ...cp.review, items: cp.review.items.map((row) => {
+        if (row.fieldId !== op.fieldId || row.target.document !== op.binding.document || row.target.signature !== op.recoverySignature) return row;
+        const accepted = op.kind === 'field' && result.status === 'accepted' && result.code === 'persisted_valid';
+        return { ...row, status: accepted ? 'accepted' as const : result.status === 'rejected' ? 'rejected' as const : 'unverified' as const, approvedDraft: accepted && !!op.approvedDraft };
+      }) } : undefined;
+      const next = { ...cp, review, revision: cp.revision + 1, updatedAt: this.now(), autofill: { ...cp.autofill, operations: cp.autofill.operations.map((o) => o.id === op.id ? { ...o, result } : o) } };
+      await checkpoints.put(next, key); await saveHistory(tx, next);
     }
     await tx.done;
   }
@@ -95,7 +132,7 @@ export class CheckpointStore {
     const current = await this.read();
     return all.flatMap((raw) => { const p = CheckpointSchema.safeParse(raw); return p.success && p.data.id !== current?.id ? [p.data] : []; });
   }
-  async restore(id: string, expected: { sessionId: string; revision: number }) {
+  async restore(id: string, expected: { sessionId: string | null; revision: number | null }) {
     const raw = await this.database.get('checkpoints', `paused:${id}`), parsed = CheckpointSchema.safeParse(raw);
     if (!parsed.success || parsed.data.expiresAt <= this.now() || terminal(parsed.data)) throw new StaleCheckpointError();
     const cp = { ...transition(parsed.data, { type: 'INTERRUPT', reason: 'restore', reattach: true }, this.now()), lifecycle: 'PAUSED' as const };

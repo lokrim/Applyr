@@ -1,3 +1,4 @@
+import { observeReview } from '../review';
 import { transition, terminal, LEASE_MS, type SessionCheckpoint } from '../domain/session';
 import { ActionResultSchema, ContentOperationSchema, recoverySignature, type ActionResult, type ContentOperation, type Autofill } from '../forms/operations';
 import { createDryRun, previewBinding } from '../mapping/rules';
@@ -21,6 +22,9 @@ export class AutofillService {
     observed?: (cp: SessionCheckpoint, inspection: Inspection) => Promise<SessionCheckpoint>;
     dispatch: (command: ContentOperation) => Promise<unknown>; changed: () => void;
   }) {}
+  invalidate() {
+    if (this.active) { this.active.cancelled = true; const command = this.active.command; if (command) void this.deps.dispatch({ ...this.base(command), type: 'clear' }).catch(() => {}); }
+  }
   private async checkpoint() { return new CheckpointStore(await this.deps.database()).read(); }
   private async save(sessionId: string, runId: string, change: (state: Autofill) => Autofill) {
     for (let attempt = 0; attempt < 4; attempt++) {
@@ -150,7 +154,7 @@ export class AutofillService {
   }
   // This entry is called only with background-held reviewed proposals by AiService.
   // It shares the deterministic lease, journal, executor and cancellation path.
-  async applyApproved(original: Inspection, inputVersion: string, values: { fieldId: string; value: ProposedValue }[]) {
+  async applyApproved(original: Inspection, inputVersion: string, values: { fieldId: string; value: ProposedValue; approvedDraft?: boolean }[]) {
     if (this.active) throw new Error('ACCESS_UNAVAILABLE');
     const active = { id: crypto.randomUUID(), sessionId: original.sessionId, cancelled: false, command: undefined as ContentOperation | undefined };
     this.active = active;
@@ -174,7 +178,7 @@ export class AutofillService {
       if (inspection.snapshot.revision !== original.snapshot.revision) throw new Error('ACCESS_UNAVAILABLE');
       const latest = await this.checkpoint();
       if (!latest || latest.revision !== cp.revision) throw new StaleCheckpointError();
-      await new CheckpointStore(db).replace({ ...transition(latest, { type: 'START', lease: { owner: this.owner, token: active.id, application: latest.target.identity ?? '', expiresAt: Date.now() + LEASE_MS } }, Date.now()), autofill: { id: active.id, inputVersion, status: 'running', operations: cp.autofill?.operations ?? [], requiredUnresolved: 0, unsupported: inspection.snapshot.unsupported.length } }, { sessionId: cp.id, revision: latest.revision });
+      await new CheckpointStore(db).replace({ ...transition(latest, { type: 'START', lease: { owner: this.owner, token: active.id, application: latest.target.identity ?? '', expiresAt: Date.now() + LEASE_MS } }, Date.now()), review: await observeReview(latest, inspection), autofill: { id: active.id, inputVersion, status: 'running', operations: cp.autofill?.operations ?? [], requiredUnresolved: 0, unsupported: inspection.snapshot.unsupported.length } }, { sessionId: cp.id, revision: latest.revision });
       started = true; this.deps.changed();
       for (const entry of values) {
         if (active.cancelled) break;
@@ -192,7 +196,7 @@ export class AutofillService {
         const operationId = crypto.randomUUID();
         const command: ContentOperation = { type: 'write', operationId, runId: active.id, fieldId: field.id, binding: previewBinding(inspection, input), precondition: field.current.fingerprint, value: entry.value, eligibilityApproved: false };
         const signature = await recoverySignature(field);
-        await this.save(cp.id, active.id, (s) => ({ ...s, operations: [...s.operations, { id: operationId, fieldId: field.id, kind: 'field', binding: command.binding, precondition: command.precondition, recoverySignature: signature, recovery: entry.value, intentAt: Date.now(), result: null }] }));
+        await this.save(cp.id, active.id, (s) => ({ ...s, operations: [...s.operations, { id: operationId, fieldId: field.id, kind: 'field', approvedDraft: entry.approvedDraft, binding: command.binding, precondition: command.precondition, recoverySignature: signature, recovery: entry.value, intentAt: Date.now(), result: null }] }));
         active.command = command;
         let result: ActionResult;
         try {
@@ -254,7 +258,7 @@ export class AutofillService {
       const cp = await this.checkpoint();
       if (!cp || cp.revision !== message.revision || active.cancelled) throw new StaleCheckpointError();
       const state: Autofill = { id: message.runId, inputVersion: frozen.version, documentInput: message.resume, status: 'running', operations: initial.autofill?.operations ?? [], requiredUnresolved: 0, unsupported: 0 };
-      await new CheckpointStore(db).replace({ ...transition(cp, { type: 'START', lease: { owner: this.owner, token: active.id, application: cp.target.identity ?? '', expiresAt: Date.now() + LEASE_MS } }, Date.now()), autofill: state }, { sessionId: cp.id, revision: cp.revision });
+      await new CheckpointStore(db).replace({ ...transition(cp, { type: 'START', lease: { owner: this.owner, token: active.id, application: cp.target.identity ?? '', expiresAt: Date.now() + LEASE_MS } }, Date.now()), review: await observeReview(cp, inspection), autofill: state }, { sessionId: cp.id, revision: cp.revision });
       started = true;
       this.deps.changed();
       const original = message.inspection;

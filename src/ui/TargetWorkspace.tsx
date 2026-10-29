@@ -1,3 +1,6 @@
+import { DuplicateChoices } from './HistoryWorkspace';
+import { HistoryStore, type HistoryEntry } from '../storage/history';
+import { getDatabase } from '../storage/database';
 import { useState } from 'react';
 import type { SessionCheckpoint } from '../domain/session';
 import { parseApplicationUrl } from '../browser/addresses';
@@ -24,6 +27,7 @@ const guidance = {
 } as const;
 
 export function TargetWorkspace({ checkpoint, onChange }: { checkpoint: SessionCheckpoint | null; onChange: (value: SessionCheckpoint | null) => void }) {
+  const [duplicates, setDuplicates] = useState<HistoryEntry[]>([]);
   const [url, setUrl] = useState('');
   const [role, setRole] = useState(checkpoint?.target.role ?? '');
   const [company, setCompany] = useState(checkpoint?.target.company ?? '');
@@ -41,6 +45,20 @@ export function TargetWorkspace({ checkpoint, onChange }: { checkpoint: SessionC
   }
   async function inspect(frameOrigin?: string, frameIdentity?: string) {
     if (checkpoint) onChange(await sendIntent({ type: 'PROBE_TARGET', sessionId: checkpoint.id, revision: checkpoint.revision, ...(frameOrigin ? { frameOrigin, frameIdentity } : {}) }));
+  }
+
+  function openApplication(raw: string, separateRun = false) {
+    let address: URL;
+    try { address = parseApplicationUrl(raw, import.meta.env.DEV); } catch { setError('Use a valid HTTPS application URL.'); return; }
+    const permission = requestPageOrigin(address.origin).catch(() => false);
+    void run(async () => {
+      const granted = await permission;
+      const matches = await new HistoryStore(await getDatabase()).duplicates(address.href);
+      if (matches.length && !separateRun) { setDuplicates(matches); return; }
+      const opened = await sendIntent({ type: 'OPEN_APPLICATION', ...binding, url: address.href, ...(separateRun ? { separateRun: true } : {}) });
+      onChange(opened); setDuplicates([]);
+      setNotice(granted ? 'Opened a new bound tab. Inspect after it loads. No previous session inputs were transferred.' : 'Opened a new application tab. Access was not granted; invoke applyr there and choose Use this tab. No access was transferred.');
+    });
   }
 
   return <section className="card target-workspace" aria-labelledby="page-heading">
@@ -85,20 +103,14 @@ export function TargetWorkspace({ checkpoint, onChange }: { checkpoint: SessionC
       event.preventDefault();
       let address: URL;
       try { address = parseApplicationUrl(url, import.meta.env.DEV); } catch (reason) { setError((reason as Error).message); return; }
-      // Start the browser permission request in this gesture, before any await.
-      const permission = requestPageOrigin(address.origin).catch(() => false);
-      void run(async () => {
-        const granted = await permission;
-        const opened = await sendIntent({ type: 'OPEN_APPLICATION', ...binding, url: address.href });
-        onChange(opened);
-        setNotice(granted ? 'Opened a new bound tab. Inspect after it loads. No previous session inputs were transferred.' : 'Opened a new application tab. Access was not granted; invoke applyr there and choose Use this tab. No access was transferred.');
-      });
+      openApplication(address.href);
     }}>
       <label htmlFor="application-url">Manual application URL</label>
       <input id="application-url" type="url" required maxLength={4096} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://company.example/jobs/123" />
       <p className="muted">Open application requests only the entered site and opens a new tab. This starts a separate binding and releases previous temporary session inputs. Saved defaults remain available by explicit selection.</p>
       <button disabled={busy}>Open application</button>
     </form>
+    {!!duplicates.length && <DuplicateChoices entries={duplicates} onView={onChange} onDismiss={() => setDuplicates([])} onSeparate={() => openApplication(url, true)} />}
     {notice && <p role="status">{notice}</p>}{error && <p className="error" role="alert">{error}</p>}
   </section>;
 }

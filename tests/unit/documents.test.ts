@@ -51,7 +51,7 @@ describe('scoped local documents in IndexedDB', () => {
     const checkpoint = createCheckpoint(target, id, now);
     await old.put('checkpoints', checkpoint, 'current'); await old.put('profiles', { sentinel: true }, 'fixture'); old.close();
     database = await openDatabase(name);
-    expect(database.version).toBe(4); expect(await database.get('profiles', 'fixture')).toEqual({ sentinel: true });
+    expect(database.version).toBe(5); expect(await database.get('profiles', 'fixture')).toEqual({ sentinel: true });
     expect(await new CheckpointStore(database, () => now).read()).toEqual(checkpoint);
     expect(await database.count('documentBlobs')).toBe(0);
   });

@@ -13,6 +13,7 @@ export const ActionResultSchema = z.strictObject({
 export type ActionResult = z.infer<typeof ActionResultSchema>;
 export const OperationSchema = z.strictObject({
   id, fieldId: id, kind: z.enum(['field', 'upload']), binding: PreviewBindingSchema,
+  approvedDraft: z.boolean().optional(),
   recoverySignature: hash.optional(),
   recovery: z.union([ProposedValueSchema, z.strictObject({ kind: z.literal('file'), name: z.string().max(255), mime: z.string().max(128), size: z.number().int().positive(), lastModified: z.number().int().nonnegative(), digest: hash })]).optional(),
   precondition: hash, intentAt: z.number().int().nonnegative(), result: ActionResultSchema.nullable(),

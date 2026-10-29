@@ -130,12 +130,13 @@ export class PageAccessService {
     return this.probe({ sessionId: next.id, revision: next.revision });
   }
 
-  async open(binding: Binding, raw: string) {
+  async open(binding: Binding, raw: string, separateRun = false) {
     const store = await this.deps.store();
     const old = await store.read();
     if ((old?.id ?? null) !== binding.sessionId || (old?.revision ?? null) !== binding.revision) throw new StaleCheckpointError();
     let url: URL;
     try { url = parseApplicationUrl(raw, this.deps.allowLoopback); } catch { throw new Error('INVALID_URL'); }
+    await store.assertNewRun(url.href, separateRun);
     const tab = await this.deps.createTab(url.href);
     if (tab.id === undefined) throw new Error('TAB_UNAVAILABLE');
     // The requested URL is the binding even if loading is still in flight. A

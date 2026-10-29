@@ -31,9 +31,9 @@ describe('ephemeral read-only inspection contracts', () => {
   });
   afterEach(async () => { database.close(); await deleteDB(name); });
 
-  it('returns a validated snapshot bound to session/tab/frame/document without checkpoint persistence or renewed retention', async () => {
-    expect(await handle()(request(), sender)).toMatchObject({ ok: true, checkpoint, inspection: { sessionId: id, tabId: 7, frameId: 0, browserDocumentId: 'browser-document', snapshot } });
-    expect(await store.read()).toEqual(checkpoint);
+  it('returns a validated snapshot bound to session/tab/frame/document without persisting snapshots; explicit inspection renews activity retention', async () => {
+    expect(await handle()(request(), sender)).toMatchObject({ ok: true, checkpoint: { ...checkpoint, revision: 1, updatedAt: 2000, lastActivityAt: 2000, expiresAt: 2000 + 7 * 24 * 60 * 60 * 1000 }, inspection: { sessionId: id, tabId: 7, frameId: 0, browserDocumentId: 'browser-document', snapshot } });
+    expect((await store.read())?.lastActivityAt).toBe(2000);
     expect(JSON.stringify(await database.getAll('checkpoints'))).not.toContain('snapshot');
   });
   it('rejects page senders, extra selectors, wrong sessions and stale checkpoint revisions before injection', async () => {

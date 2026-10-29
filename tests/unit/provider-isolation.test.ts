@@ -36,7 +36,19 @@ describe('F11 credential and consent isolation', () => {
     db.close(); await deleteDB(name);
     const old = await openDB(name, 3, { upgrade(d) { for (const n of ['checkpoints', 'profiles', 'documents', 'documentBlobs', 'documentLinks']) d.createObjectStore(n); } });
     await old.put('profiles', { fixture: true }, 'default'); old.close(); db = await openDatabase(name);
-    expect(db.version).toBe(4); expect(await db.get('profiles', 'default')).toEqual({ fixture: true }); expect(await db.count('providerCredentials')).toBe(0);
+    expect(db.version).toBe(5); expect(await db.get('profiles', 'default')).toEqual({ fixture: true }); expect(await db.count('providerCredentials')).toBe(0);
+  });
+  it('Delete all fences stale settings even after durable revision counters are cleared', async () => {
+    const stale = (await status()).config;
+    await service.fenceReset();
+    await db.clear('providerSettings'); await db.clear('providerCredentials');
+    for (const name of Object.keys(mem.data)) delete mem.data[name];
+    await expect(service.execute({ ...envelope('openai'), type: 'SAVE', config: { ...stale, remember: true, model: 'stale-model' }, key: CREDENTIAL_CANARY })).rejects.toMatchObject({ code: 'stale' });
+    expect(await db.getAll('providerCredentials')).toEqual([]); expect(mem.data['provider-key:openai']).toBeUndefined();
+    const fresh = await status(); expect(fresh.config.revision).toBeGreaterThan(stale.revision);
+    expect(await db.getAll('providerSettings')).toEqual([]);
+    const saved = await service.execute({ ...envelope('openai'), type: 'SAVE', config: { ...fresh.config, model: 'new-model', remember: false }, key: 'NEW_EXPLICIT_KEY' });
+    expect(saved.hasKey).toBe(true); expect(saved.config.revision).toBeGreaterThan(fresh.config.revision); expect(transport).not.toHaveBeenCalled();
   });
   it('loads no network or candidate storage and returns honest unverified status without credentials', async () => {
     await db.put('profiles', { name: 'F11_PRIVATE_PROFILE' }, 'default');

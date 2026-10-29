@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
 import { browser } from 'wxt/browser';
+import { HistoryWorkspace, DuplicateChoices } from './HistoryWorkspace';
+import { DataControls } from './DataControls';
+import { Help } from './Help';
+import { getDatabase } from '../storage/database';
+import { HistoryStore, type HistoryEntry } from '../storage/history';
 import { branding } from '../branding';
 import type { SessionCheckpoint } from '../domain/session';
 import { openOptions, openSessionSurface, openSessionTab, surfaceCapability } from '../browser/surfaces';
@@ -13,7 +18,7 @@ import { NotificationSettings } from './NotificationSettings';
 import { ProviderSettings } from './ProviderSettings';
 
 export type Surface = 'popup' | 'session' | 'options';
-type SourceTab = { id: number; windowId: number };
+type SourceTab = { id: number; windowId: number; url?: string };
 
 export function App({ surface }: { surface: Surface }) {
   const [checkpoint, setCheckpoint] = useState<SessionCheckpoint | null>(null);
@@ -23,6 +28,9 @@ export function App({ surface }: { surface: Surface }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const capability = surfaceCapability();
+  const [duplicates, setDuplicates] = useState<HistoryEntry[]>([]);
+  const [dataEpoch, setDataEpoch] = useState(0);
+  useEffect(() => { const channel = new BroadcastChannel('applyr-data-reset'); channel.onmessage = () => { setDataEpoch((n) => n + 1); setDuplicates([]); void readCheckpoint().then(setCheckpoint).catch(() => setError('Local state could not be refreshed after deletion. Reload to verify.')); }; return () => channel.close(); }, []);
 
   useEffect(() => {
     let alive = true;
@@ -33,10 +41,12 @@ export function App({ surface }: { surface: Surface }) {
         const [tabs, saved] = await Promise.all([tabPromise, readCheckpoint()]);
         const tab = tabs[0];
         const candidate = tab?.id !== undefined && !tab.url?.startsWith(browser.runtime.getURL('/'))
-          ? { id: tab.id, windowId: tab.windowId } : null;
+          ? { id: tab.id, windowId: tab.windowId, url: tab.url } : null;
         if (!alive) return;
         setSourceTab(candidate);
         if (!saved && candidate) {
+          const matches = await new HistoryStore(await getDatabase()).duplicates(tab?.url);
+          if (matches.length) { setDuplicates(matches); return; }
           const captured = await sendIntent({ type: 'CAPTURE_TARGET', tabId: candidate.id, sessionId: null, revision: null });
           if (alive) setCheckpoint(captured);
         } else setCheckpoint(saved);
@@ -59,6 +69,14 @@ export function App({ surface }: { surface: Surface }) {
     try { await action(); }
     catch (reason) { setError(message(reason)); }
     finally { setBusy(false); }
+  }
+
+  async function capture(separateRun = false) {
+    if (!sourceTab) return;
+    const matches = await new HistoryStore(await getDatabase()).duplicates(sourceTab.url);
+    if (matches.length && !separateRun) { setDuplicates(matches); return; }
+    setCheckpoint(await sendIntent({ type: 'CAPTURE_TARGET', tabId: sourceTab.id, sessionId: checkpoint?.id ?? null, revision: checkpoint?.revision ?? null, ...(separateRun ? { separateRun: true } : {}) }));
+    setDuplicates([]); setNotice('Source tab captured. Open the session when ready.');
   }
 
   return (
@@ -91,9 +109,10 @@ export function App({ surface }: { surface: Surface }) {
           </> : <p>Open the toolbar popup on your intended application tab to save a source reference. No profile has been added.</p>}
         </section>
 
-        {checkpoint && surface !== 'popup' && <AttentionQueue key={checkpoint.id} checkpoint={checkpoint} onChange={setCheckpoint} />}
-        {checkpoint && <SessionControls checkpoint={checkpoint} onChange={setCheckpoint} />}
-        <TargetWorkspace key={`target-${checkpoint?.id ?? 'empty'}`} checkpoint={checkpoint} onChange={setCheckpoint} />
+        {!!duplicates.length && <DuplicateChoices entries={duplicates} onView={setCheckpoint} onDismiss={() => setDuplicates([])} onSeparate={() => void perform(() => capture(true))} />}
+        {checkpoint && surface !== 'popup' && <AttentionQueue key={`${checkpoint.id}:${dataEpoch}`} checkpoint={checkpoint} onChange={setCheckpoint} />}
+        {checkpoint && <SessionControls key={`${checkpoint.id}:${dataEpoch}:${checkpoint.recovery?.reason ?? ''}`} checkpoint={checkpoint} onChange={setCheckpoint} />}
+        <TargetWorkspace key={`target-${checkpoint?.id ?? 'empty'}:${dataEpoch}`} checkpoint={checkpoint} onChange={setCheckpoint} />
 
         <section className="card" aria-labelledby="readiness-heading">
           <h2 id="readiness-heading">Ready when you are</h2>
@@ -113,8 +132,7 @@ export function App({ surface }: { surface: Surface }) {
               if (checkpoint) void perform(async () => setNotice(await openSessionSurface(checkpoint.target.windowId)));
             }}>Open session</button>
             {sourceTab && <button className="secondary" disabled={busy || (sourceTab.id === checkpoint?.target.tabId && !['navigation', 'restart', 'closed'].includes(checkpoint?.access?.reason ?? ''))} onClick={() => void perform(async () => {
-              setCheckpoint(await sendIntent({ type: 'CAPTURE_TARGET', tabId: sourceTab.id, sessionId: checkpoint?.id ?? null, revision: checkpoint?.revision ?? null }));
-              setNotice('Source tab captured. Open the session when ready.');
+              await capture();
             })}>Use this tab</button>}
           </>}
           {surface !== 'session' && <button className="secondary" disabled={busy} onClick={() => void perform(async () => { await openSessionTab(); })}>Open in tab</button>}
@@ -122,11 +140,16 @@ export function App({ surface }: { surface: Surface }) {
           {surface !== 'options' && <button className="text-button" onClick={() => void perform(openOptions)}>Settings & privacy</button>}
         </div>
 
+        <div key={dataEpoch}>
         {surface !== 'popup' && <DocumentWorkspace key={`documents-${checkpoint?.id ?? 'no-session'}`} surface={surface} sessionId={checkpoint?.id ?? null} onMutation={async () => { setCheckpoint(await readCheckpoint()); }} />}
         {surface !== 'popup' && <ProfileWorkspace key={checkpoint?.id ?? 'no-session'} surface={surface} sessionId={checkpoint?.id ?? null} onFreeze={async () => { setCheckpoint(await readCheckpoint()); }} />}
 
         {surface === 'options' && <ProviderSettings />}
         {surface === 'options' && <NotificationSettings />}
+        {surface === 'options' && <HistoryWorkspace onChange={setCheckpoint} />}
+        </div>
+        {surface === 'options' && <DataControls onChange={setCheckpoint} onReset={() => setDataEpoch((n) => n + 1)} />}
+        {surface === 'options' && <Help />}
         {surface === 'options' && <section className="card" aria-labelledby="storage-heading">
           <h2 id="storage-heading">Local recovery & permissions</h2>
           <p>{branding.copy.privacy}</p>

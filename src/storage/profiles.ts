@@ -5,7 +5,7 @@ import { CheckpointSchema } from '../runtime/schemas';
 import { RECOVERY_TTL_MS, terminal, transition } from '../domain/session';
 import { validateProfileDocument } from '../profile/markdown';
 import type { ProfileDocument } from '../profile/schema';
-import { LOCAL_STORES, purgeDocumentRecords } from './documents';
+import { LOCAL_STORES, purgeDocumentRecords, renewSessionInputs } from './documents';
 
 const documentSchema = z.custom<ProfileDocument>((value) => {
   if (!value || typeof value !== 'object') return false;
@@ -16,11 +16,11 @@ const documentSchema = z.custom<ProfileDocument>((value) => {
 const version = z.string().uuid();
 const time = z.number().int().nonnegative();
 const SavedSchema = z.strictObject({ schemaVersion: z.literal(1), version, document: documentSchema, savedAt: time });
-const SnapshotSchema = z.strictObject({ schemaVersion: z.literal(1), version, sessionId: version, document: documentSchema,
-  source: z.enum(['saved', 'replacement']), savedVersion: version.nullable(), frozenAt: time, expiresAt: time, requiresReinspection: z.literal(true) })
-  .refine((s) => s.frozenAt < s.expiresAt && s.expiresAt - s.frozenAt <= RECOVERY_TTL_MS && (s.source === 'saved') === (s.savedVersion !== null));
+export const ProfileSnapshotSchema = z.strictObject({ schemaVersion: z.literal(1), version, sessionId: version, document: documentSchema,
+  source: z.enum(['saved', 'replacement']), savedVersion: version.nullable(), frozenAt: time, lastActivityAt: time.optional(), expiresAt: time, requiresReinspection: z.literal(true) })
+  .refine((s) => s.frozenAt <= (s.lastActivityAt ?? s.frozenAt) && (s.lastActivityAt ?? s.frozenAt) < s.expiresAt && s.expiresAt - (s.lastActivityAt ?? s.frozenAt) <= RECOVERY_TTL_MS && (s.source === 'saved') === (s.savedVersion !== null));
 export type SavedProfile = z.infer<typeof SavedSchema>;
-export type ProfileSnapshot = z.infer<typeof SnapshotSchema>;
+export type ProfileSnapshot = z.infer<typeof ProfileSnapshotSchema>;
 export class ProfileStateError extends Error {
   constructor() { super('Profile state changed or expired. Reload profile state before trying again.'); }
 }
@@ -35,7 +35,7 @@ export class ProfileStore {
     const rawDefault = await tx.objectStore('profiles').get('default');
     const rawSnapshot = await tx.objectStore('profiles').get('snapshot');
     const saved = SavedSchema.safeParse(rawDefault);
-    const snapshot = SnapshotSchema.safeParse(rawSnapshot);
+    const snapshot = ProfileSnapshotSchema.safeParse(rawSnapshot);
     const checkpoint = CheckpointSchema.safeParse(await tx.objectStore('checkpoints').get('current'));
     await purgeDocumentRecords(tx, checkpoint.success && checkpoint.data.expiresAt > this.now() ? checkpoint.data.id : null, this.now());
     const selected = snapshot.success && checkpoint.success && checkpoint.data.id === snapshot.data.sessionId && checkpoint.data.expiresAt > this.now() && snapshot.data.expiresAt > this.now() ? snapshot.data : null;
@@ -61,10 +61,10 @@ export class ProfileStore {
     await this.read();
     const replacement = selection.source === 'replacement' ? validateProfileDocument(selection.document).document : null;
     if (selection.source === 'replacement' && !replacement) throw new Error('Repair the selected profile before freezing.');
-    const tx = this.database.transaction(['profiles', 'checkpoints'], 'readwrite');
+    const tx = this.database.transaction(LOCAL_STORES, 'readwrite');
     const profiles = tx.objectStore('profiles');
     const checkpoint = CheckpointSchema.safeParse(await tx.objectStore('checkpoints').get('current'));
-    const old = SnapshotSchema.safeParse(await profiles.get('snapshot'));
+    const old = ProfileSnapshotSchema.safeParse(await profiles.get('snapshot'));
     const active = old.success && checkpoint.success && old.data.sessionId === checkpoint.data.id && old.data.expiresAt > this.now() ? old.data : null;
     if (!checkpoint.success || terminal(checkpoint.data) || checkpoint.data.id !== sessionId || checkpoint.data.expiresAt <= this.now() || (active?.version ?? null) !== expectedSnapshot) { await tx.done; throw new ProfileStateError(); }
     const saved = SavedSchema.safeParse(await profiles.get('default'));
@@ -72,16 +72,17 @@ export class ProfileStore {
     const frozenAt = this.now();
     const next: ProfileSnapshot = {
       schemaVersion: 1, version: this.uuid(), sessionId, source: selection.source, savedVersion: selection.source === 'saved' ? selection.savedVersion : null,
-      document: replacement ?? (saved.success ? saved.data.document : undefined)!, frozenAt, expiresAt: frozenAt + RECOVERY_TTL_MS, requiresReinspection: true,
+      document: replacement ?? (saved.success ? saved.data.document : undefined)!, frozenAt, lastActivityAt: frozenAt, expiresAt: frozenAt + RECOVERY_TTL_MS, requiresReinspection: true,
     };
     // Explicit activity renews the checkpoint too; simply viewing state never does.
-    await tx.objectStore('checkpoints').put({ ...checkpoint.data, revision: checkpoint.data.revision + 1, updatedAt: this.now(), expiresAt: next.expiresAt }, 'current');
-    await profiles.put(next, 'snapshot'); await tx.done;
+    await tx.objectStore('checkpoints').put({ ...checkpoint.data, revision: checkpoint.data.revision + 1, updatedAt: frozenAt, lastActivityAt: frozenAt, expiresAt: next.expiresAt }, 'current');
+    await profiles.put(next, 'snapshot');
+    await renewSessionInputs(tx, sessionId, frozenAt, next.expiresAt); await tx.done;
     return next;
   }
 
   async deleteDefault(expectedVersion: string) {
-    const tx = this.database.transaction(['profiles', 'checkpoints'], 'readwrite');
+    const tx = this.database.transaction(LOCAL_STORES, 'readwrite');
     const old = SavedSchema.safeParse(await tx.objectStore('profiles').get('default'));
     if (!old.success || old.data.version !== expectedVersion) { await tx.done; throw new ProfileStateError(); }
     // Delete sensitive recovery copies too, including a session-only replacement.
@@ -94,7 +95,7 @@ export class ProfileStore {
       const cp = parsed.data;
       const next = terminal(cp) ? { ...cp, revision: cp.revision + 1, updatedAt: this.now() } : transition(cp, { type: 'INTERRUPT', reason: 'input_deleted' }, this.now());
       next.approval = undefined;
-      next.attention = undefined;
+      next.attention = undefined; next.review = undefined;
       if (next.autofill) next.autofill = { ...next.autofill, status: next.autofill.status === 'running' ? 'interrupted' : next.autofill.status, operations: next.autofill.operations.map((op) => ({ ...op, recovery: undefined })) };
       await checkpoints.put(next, key);
     }

@@ -5,6 +5,7 @@ import { exportProfile, parseProfileMarkdown, readProfileFile, removeUnknownKeys
 import { MAX_PROFILE_BYTES, type ProfileDocument } from '../profile/schema';
 import { changedProfilePaths, profileAssertions } from '../profile/assertions';
 import { ProfileFields } from './ProfileFields';
+import { sendIntent, readCheckpoint } from '../runtime/client';
 import { downloadMarkdown } from '../browser/export';
 import { notifyProfileChange, notifyProfileDeletion, onProfileChange, onProfileDeletion } from '../browser/profile-events';
 import blankExample from '../profile/examples/profile-template.md?raw';
@@ -102,7 +103,7 @@ export function ProfileWorkspace({ surface, sessionId, onFreeze }: { surface: 'o
     edit({ ...draft, data: data as ProfileDocument['data'], answerBodies: bodies });
   }
 
-  return <section className="card profile-workspace" aria-labelledby="profile-heading">
+  return <section id="profiles" className="card profile-workspace" aria-labelledby="profile-heading">
     <h2 id="profile-heading">Candidate profile</h2>
     <p>Set up locally, without AI. Every field is optional. Legal names stay as entered; country codes never imply work authorization.</p>
     <p className="muted">Personal files and exports are plaintext. Local browser storage is not encrypted by applyr. Keep passwords, API keys, OTPs, cookies and tokens out of fields and prose. Credential checks cannot prove a file contains no secrets.</p>
@@ -164,7 +165,7 @@ export function ProfileWorkspace({ surface, sessionId, onFreeze }: { surface: 'o
         <details className="profile-section"><summary>Answer text & notes</summary>{draft.data.answers?.map((answer, i) => <label key={i}>Answer body: {answer.id}<textarea rows={5} spellCheck={false} value={draft.answerBodies[answer.id] ?? ''} onChange={(e) => edit({ ...draft, answerBodies: { ...draft.answerBodies, [answer.id]: e.target.value } })} /></label>)}<label>Notes (never treated as facts)<textarea rows={5} spellCheck={false} value={draft.notes} onChange={(e) => edit({ ...draft, notes: e.target.value })} /></label></details>
         <button disabled={busy} onClick={() => { setPreview(validateProfileDocument(draft)); setProposal(false); }}>Validate profile</button>
       </div>}
-      {surface === 'options' && saved && <div className="delete-profile"><button className="text-button" disabled={busy} onClick={() => setDeleting(true)}>Delete saved profile</button>{deleting && <><p>This removes the saved default, all sensitive frozen profile copies and open working copies in applyr. Exported files remain under your control.</p><button disabled={busy} onClick={() => void run(async () => { await (await profileStore()).deleteDefault(saved.version); clearProfileMemory(); notifyProfileDeletion(); setNotice('Saved profile and recovery copies deleted.'); })}>Confirm delete profile and recovery copies</button><button className="text-button" onClick={() => setDeleting(false)}>Keep profile</button></>}</div>}
+      {surface === 'options' && saved && <div className="delete-profile"><button className="text-button" disabled={busy} onClick={() => setDeleting(true)}>Delete saved profile</button>{deleting && <><p>This removes the saved default, all sensitive frozen profile copies and open working copies in applyr. Exported files remain under your control.</p><button disabled={busy} onClick={() => void run(async () => { const cp = await readCheckpoint(); await sendIntent({ type: 'DELETE_DATA', scope: 'profile', sessionId: cp?.id ?? null, revision: cp?.revision ?? null }); clearProfileMemory(); notifyProfileDeletion(); setNotice('Saved profile and recovery copies deleted.'); })}>Confirm delete profile and recovery copies</button><button className="text-button" onClick={() => setDeleting(false)}>Keep profile</button></>}</div>}
     </>}
   </section>;
 }

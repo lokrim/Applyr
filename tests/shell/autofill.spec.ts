@@ -35,8 +35,9 @@ test('F01 real packaged Start writes only deterministic fields, validates requir
   const session = await context.newPage(); await session.goto(popup.url().replace('popup.html', 'session.html')); await freeze(session);
   await session.getByRole('button', { name: 'Inspect fields', exact: true }).click();
   await session.getByRole('button', { name: 'Start Autofill', exact: true }).click();
-  const results = session.getByTestId('autofill-results'); await expect(results).toContainText('Current-step autofill: review', { timeout: 20_000 });
+  const results = session.getByTestId('autofill-results'); await expect(results).toContainText('Autofill status: review', { timeout: 20_000 });
   await expect(results).toContainText('5 accepted');
+  await expect(session.getByTestId('review-counts')).toContainText('3 unresolved required questions');
   await expect(source.getByLabel('Email', { exact: true })).toHaveValue('alex@example.test');
   await expect(source.getByLabel('Phone', { exact: true })).toHaveValue('+001234');
   await expect(source.getByLabel('Website', { exact: true })).toHaveValue('https://example.test/');
@@ -68,7 +69,7 @@ test('F02 controlled React persisted state, rerender rejection, select and ordin
   await box.getByLabel('Session answer', { exact: true }).selectOption('true');
   await box.getByRole('button', { name: 'Use for this application preview' }).click();
   await session.getByRole('button', { name: 'Start Autofill', exact: true }).click();
-  await expect(session.getByTestId('autofill-results')).toContainText('Current-step autofill: review', { timeout: 20_000 });
+  await expect(session.getByTestId('autofill-results')).toContainText('Autofill status: review', { timeout: 20_000 });
   await expect(session.getByTestId('autofill-results')).toContainText('3 accepted');
   await expect(session.getByTestId('autofill-results')).toContainText('1 rejected');
   const cp = await current(session);
@@ -92,7 +93,7 @@ test('F03 conditional required fields are reinspected and cancellation stops sub
   await box.getByText('Review answer for this session', { exact: true }).click(); await box.getByLabel('Session answer', { exact: true }).selectOption('true');
   await box.getByRole('button', { name: 'Use for this application preview' }).click();
   await session.getByRole('button', { name: 'Start Autofill', exact: true }).click();
-  await expect(session.getByTestId('autofill-results')).toContainText('Current-step autofill: review', { timeout: 20_000 });
+  await expect(session.getByTestId('autofill-results')).toContainText('Autofill status: review', { timeout: 20_000 });
   await expect(source.getByLabel('Required relocation city')).toBeVisible();
   expect((await current(session)).autofill?.requiredUnresolved).toBe(1);
   expect(await source.evaluate(() => (window as unknown as { fixture: { finalizations: number } }).fixture.finalizations)).toBe(0);
@@ -125,7 +126,7 @@ test('F07 selected resume crosses isolated bounded JSON transfer unchanged, dela
   await session.getByRole('button', { name: 'Inspect fields', exact: true }).click();
   await session.getByLabel('Include this resume in a uniquely identified native resume field').check();
   await session.getByRole('button', { name: 'Start Autofill', exact: true }).click();
-  await expect(session.getByTestId('autofill-results')).toContainText('Current-step autofill: review', { timeout: 20_000 });
+  await expect(session.getByTestId('autofill-results')).toContainText('Autofill status: review', { timeout: 20_000 });
   const cp = await current(session), uploads = cp.autofill!.operations.filter((o) => o.kind === 'upload');
   expect(uploads).toHaveLength(1); expect(uploads[0]!.result).toMatchObject({ status: 'rejected', selectedBytes: true, siteAcceptance: 'rejected' });
   const selected = await source.locator('#upload').evaluate(async (e) => Array.from(new Uint8Array(await (e as HTMLInputElement).files![0]!.arrayBuffer())));
@@ -165,7 +166,7 @@ test('country approval is required for eligibility; consent and demographics sta
   await expect(auth.getByRole('button', { name: 'Use for this application preview' })).toBeDisabled();
   await auth.getByRole('checkbox').check(); await auth.getByRole('button', { name: 'Use for this application preview' }).click();
   await session.getByRole('button', { name: 'Start Autofill', exact: true }).click();
-  await expect(session.getByTestId('autofill-results')).toContainText('Current-step autofill: review', { timeout: 20_000 });
+  await expect(session.getByTestId('autofill-results')).toContainText('Autofill status: review', { timeout: 20_000 });
   await expect(source.getByLabel('Are you authorized to work in US?')).toHaveValue('no');
   await expect(source.getByLabel('I certify my answers')).not.toBeChecked(); await expect(source.getByLabel('Gender')).toHaveValue('');
   expect(await source.evaluate(() => (window as unknown as { fixture: { finalizations: number } }).fixture.finalizations)).toBe(0);

@@ -11,6 +11,7 @@ export class ProviderService {
   private active = new Map<Provider, AbortController>();
   private statuses = new Map<Provider, ProviderStatus>();
   private blocked = new Set<Provider>();
+  private revisionFloors = new Map<Provider, number>();
   constructor(private storage: ProviderStorage, private contains: (pattern: string) => Promise<boolean>, private adapter: (provider: Provider) => ProviderAdapter = createAdapter, private candidatePermission: () => Promise<boolean> = async () => true) {}
   private serial<T>(work: () => Promise<T>): Promise<T> {
     const next = this.queue.then(work); this.queue = next.catch(() => {}); return next;
@@ -19,8 +20,23 @@ export class ProviderService {
     this.epochs.set(provider, (this.epochs.get(provider) ?? 0) + 1);
     this.active.get(provider)?.abort(); this.active.delete(provider); this.statuses.set(provider, unverified());
   }
-  private async view(provider: Provider): Promise<ProviderView> {
+  private async config(provider: Provider) {
     const config = await this.storage.config(provider);
+    return { ...config, revision: Math.max(config.revision, this.revisionFloors.get(provider) ?? 0) };
+  }
+  // Keep a nonpersonal in-memory fence after Delete all clears durable counters.
+  // Old settings intents cannot become current again by matching default revision 0.
+  async fenceReset() {
+    this.revokePermissions();
+    await this.serial(async () => {
+      for (const provider of ['openai', 'gemini', 'claude'] as const) {
+        const config = await this.config(provider);
+        this.revisionFloors.set(provider, config.revision + 1);
+      }
+    });
+  }
+  private async view(provider: Provider): Promise<ProviderView> {
+    const config = await this.config(provider);
     return { config, hasKey: !this.blocked.has(provider) && !!await this.storage.key(provider), status: this.statuses.get(provider) ?? unverified() };
   }
   async execute(request: ProviderRequest): Promise<ProviderView> {
@@ -30,7 +46,7 @@ export class ProviderService {
     // Invalidate synchronously, including while a prior test is preparing or sleeping.
     this.invalidate(provider);
     return this.serial(async () => {
-      const config = await this.storage.config(provider);
+      const config = await this.config(provider);
       const revision = request.type === 'SAVE' ? request.config.revision : request.revision;
       // Revocation/removal must dominate a stale view. A queued stale SAVE
       // cannot restore keys after this mutation advances the revision.
@@ -70,7 +86,7 @@ export class ProviderService {
     this.active.set(provider, controller);
     const current = () => !controller.signal.aborted && epoch === (this.epochs.get(provider) ?? 0);
     try {
-      const { config, key } = await this.serial(async () => ({ config: await this.storage.config(provider), key: await this.storage.key(provider) }));
+      const { config, key } = await this.serial(async () => ({ config: await this.config(provider), key: await this.storage.key(provider) }));
       if (!current()) throw new ProviderFailure('cancelled');
       if (config.revision !== revision) throw new ProviderFailure('stale');
       if (!key || this.blocked.has(provider)) throw new ProviderFailure('auth');
@@ -97,7 +113,7 @@ export class ProviderService {
     const current = () => !controller.signal.aborted && epoch === (this.epochs.get(provider) ?? 0);
     try {
       if (!await this.candidateReady(provider) || !current()) throw new ProviderFailure('permission');
-      const { config, key } = await this.serial(async () => ({ config: await this.storage.config(provider), key: await this.storage.key(provider) }));
+      const { config, key } = await this.serial(async () => ({ config: await this.config(provider), key: await this.storage.key(provider) }));
       if (!current() || !key || !await authorize() || !current()) throw new ProviderFailure('cancelled');
       const proposals = await this.adapter(provider).propose(config, key, controller.signal, context);
       if (!current()) throw new ProviderFailure('cancelled');
@@ -121,11 +137,12 @@ export class ProviderService {
     for (const provider of ['openai', 'gemini', 'claude'] as const) this.invalidate(provider);
   }
 }
-export function providerHandler(service: ProviderService, extensionId: string, optionsUrl: string) {
+export function providerHandler(service: ProviderService, extensionId: string, optionsUrl: string, changed?: () => void) {
   return async (raw: unknown, sender: Sender) => {
     if (!trustedPage(sender, extensionId, [optionsUrl])) return { ok: false, requestId: null, code: 'permission' };
     const parsed = ProviderRequestSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, requestId: null, code: 'invalid_request' };
+    if (!['STATUS', 'TEST'].includes(parsed.data.type)) changed?.();
     try { return { ok: true, requestId: parsed.data.requestId, view: await service.execute(parsed.data) }; }
     catch (error) { return { ok: false, requestId: parsed.data.requestId, code: error instanceof ProviderFailure ? error.code : 'storage' }; }
   };

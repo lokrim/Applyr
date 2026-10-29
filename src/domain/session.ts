@@ -34,6 +34,7 @@ export interface SessionCheckpoint {
   createdAt: number;
   updatedAt: number;
   expiresAt: number;
+  lastActivityAt?: number;
   submission: { status: 'unknown' | 'reported_by_user'; reportedAt?: number; source?: 'user' };
   reviewScope?: 'current_step' | 'final_review';
   pauseRequested?: boolean;
@@ -44,6 +45,9 @@ export interface SessionCheckpoint {
   approval?: { batchId: string; inputVersion: string; document: string; revision: number; at: number; decisions: { fieldId: string; action: 'approve' | 'reject'; text: string }[] };
   autofill?: import('../forms/operations').Autofill;
   attention?: import('../attention/schema').Attention;
+  review?: import('../review').FieldReview;
+  providerError?: import('../providers/contracts').ProviderErrorCode;
+  providers?: { provider: 'openai' | 'claude' | 'gemini'; model: string }[];
 }
 
 export const RECOVERY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -67,6 +71,15 @@ export type Lifecycle = 'QUEUED' | 'RUNNING' | 'NEEDS_ATTENTION' | 'PAUSED' | 'R
 export type Phase = 'SETUP' | 'INSPECTING' | 'PREPARING' | 'FILLING' | 'VALIDATING';
 export const LEASE_MS = 60_000;
 export const terminal = (s: SessionCheckpoint) => ['CANCELLED', 'FAILED', 'AUTOFILL_FINISHED'].includes(s.lifecycle);
+// An explicit final-step choice cannot override known blockers or missing evidence.
+export function reviewReady(s: SessionCheckpoint) {
+  return !!s.review?.items.length && s.autofill?.status === 'review' && s.access?.status === 'ready'
+    && !s.recovery?.inspectionRequired && !s.recovery?.reattachRequired
+    && !s.attention?.items.some((i) => i.status === 'open' || i.status === 'answer_ready')
+    && !s.review.areas.some((a) => a.unsupported > 0)
+    && s.autofill.requiredUnresolved === 0 && s.autofill.unsupported === 0
+    && !s.review.items.some((i) => i.status === 'rejected' || i.status === 'unverified' || (i.required && i.status === 'unresolved'));
+}
 export type SessionEvent =
   | { type: 'START'; lease: NonNullable<SessionCheckpoint['lease']> }
   | { type: 'PHASE'; phase: Exclude<Phase, 'SETUP'> }
@@ -81,7 +94,7 @@ export function transition(s: SessionCheckpoint, event: SessionEvent, now: numbe
   switch (event.type) {
     case 'START':
       if (s.lifecycle === 'RUNNING' || s.lifecycle === 'PAUSED' || s.recovery?.inspectionRequired || s.recovery?.reattachRequired || s.pauseRequested) throw new Error('ACCESS_UNAVAILABLE');
-      next = { ...next, lifecycle: 'RUNNING', phase: 'FILLING', lease: event.lease, reviewScope: undefined }; break;
+      next = { ...next, lastActivityAt: now, expiresAt: now + RECOVERY_TTL_MS, lifecycle: 'RUNNING', phase: 'FILLING', lease: event.lease, reviewScope: undefined }; break;
     case 'PHASE': if (s.lifecycle !== 'RUNNING') throw new Error('ACCESS_UNAVAILABLE'); next.phase = event.phase; break;
     case 'PAUSE':
       next.pauseRequested = s.lifecycle === 'RUNNING';
@@ -93,7 +106,9 @@ export function transition(s: SessionCheckpoint, event: SessionEvent, now: numbe
     case 'RESUME':
       if (s.recovery?.reattachRequired) throw new Error('ACCESS_UNAVAILABLE');
       next = { ...next, lifecycle: 'QUEUED', phase: 'INSPECTING', reviewScope: undefined, pauseRequested: false, lease: undefined, approval: undefined, recovery: { reason: 'resumed', inspectionRequired: true, reattachRequired: false } }; break;
-    case 'REVIEW': next = { ...next, lifecycle: 'READY_FOR_REVIEW', phase: 'VALIDATING', reviewScope: event.scope ?? 'current_step', lease: undefined }; break;
+    case 'REVIEW':
+      if (event.scope === 'final_review' && !reviewReady(s)) throw new Error('ACCESS_UNAVAILABLE');
+      next = { ...next, lifecycle: 'READY_FOR_REVIEW', phase: 'VALIDATING', reviewScope: event.scope ?? 'current_step', lease: undefined }; break;
     case 'INTERRUPT': next = { ...next, lifecycle: s.lifecycle === 'PAUSED' ? 'PAUSED' : 'NEEDS_ATTENTION', reviewScope: undefined, pauseRequested: false, lease: undefined, approval: undefined, recovery: { reason: event.reason, inspectionRequired: true, reattachRequired: !!event.reattach }, aiRequest: s.aiRequest?.status === 'pending' ? { ...s.aiRequest, status: 'uncertain' } : s.aiRequest }; break;
     case 'CANCEL': next = { ...next, lifecycle: 'CANCELLED', pauseRequested: false, lease: undefined, approval: undefined, aiRequest: s.aiRequest?.status === 'pending' ? { ...s.aiRequest, status: 'uncertain' } : s.aiRequest }; break;
     case 'FAIL': next = { ...next, lifecycle: 'FAILED', pauseRequested: false, lease: undefined, approval: undefined, recovery: { reason: event.reason, inspectionRequired: true, reattachRequired: false }, aiRequest: s.aiRequest?.status === 'pending' ? { ...s.aiRequest, status: 'uncertain' } : s.aiRequest }; break;

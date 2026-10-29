@@ -8,6 +8,7 @@ export const SelectionSchema = z.strictObject({ formId: id, document: id, revisi
 export const FormSnapshotSchema = z.strictObject({
   schemaVersion: z.literal(1),
   adapter: AdapterSchema.optional(),
+  step: z.strictObject({ signature: hash, hasNext: z.boolean() }).optional(),
   identity: hash, document: id, revision: z.number().int().positive(),
   status: z.enum(['stable', 'unstable', 'selection_required', 'stale_selection']),
   selectedForm: id.nullable(),
@@ -16,7 +17,7 @@ export const FormSnapshotSchema = z.strictObject({
     id, label: text, labelSource: z.enum(['label', 'aria', 'placeholder', 'missing']),
     context: z.array(text).max(5), type: z.enum(['text', 'email', 'tel', 'url', 'date', 'month', 'number', 'select', 'textarea', 'radio', 'checkbox', 'file']), autocomplete: text,
     required: z.boolean(), executable: z.boolean(),
-    control: z.literal('inline_listbox_v1').optional(),
+    control: z.enum(['inline_listbox_v1', 'inline_radio_v1']).optional(),
     category: z.enum(['short_answer', 'long_answer', 'choice', 'preference', 'declaration', 'sensitive', 'file', 'missing_semantics']),
     filePurpose: z.enum(['resume', 'cover_letter', 'portfolio', 'transcript', 'unknown']).nullable(),
     constraints: z.strictObject({ min: text, max: text, step: text, minLength: text, maxLength: text, pattern: text, accept: text, multiple: z.boolean() }),
@@ -25,7 +26,7 @@ export const FormSnapshotSchema = z.strictObject({
     radioGroup: z.strictObject({ primary: id, label: text, present: z.boolean() }).optional(),
     validation: z.strictObject({ valid: z.boolean().nullable(), flags: z.array(z.enum(['valueMissing', 'typeMismatch', 'patternMismatch', 'tooLong', 'tooShort', 'rangeUnderflow', 'rangeOverflow', 'stepMismatch', 'badInput', 'customError'])).max(10), ariaInvalid: z.boolean(), errorPresent: z.boolean() }),
   })).max(100),
-  unsupported: z.array(z.strictObject({ code: z.enum(['no_relevant_form', 'frame_requires_inspection', 'opaque_custom_element', 'custom_control', 'canvas', 'rich_text', 'locked_control', 'limit', 'authentication', 'login', 'otp', 'captcha']), label: text })).max(100),
+  unsupported: z.array(z.strictObject({ code: z.enum(['no_relevant_form', 'frame_requires_inspection', 'opaque_custom_element', 'custom_control', 'canvas', 'rich_text', 'locked_control', 'limit', 'authentication', 'login', 'otp', 'captcha', 'repeated_history', 'manual_upload']), label: text })).max(100),
   observation: z.strictObject({ mutations: z.number().int().nonnegative(), scans: z.number().int().nonnegative(), bounded: z.literal(true) }),
 }).refine((snapshot) => {
   const formIds = new Set(snapshot.forms.map((form) => form.id));

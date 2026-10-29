@@ -35,7 +35,7 @@ export async function operateControl(command: ContentOperation): Promise<ActionR
   const e = state.registry.get(command.fieldId)?.deref();
   // The only custom operation is an already visible, registered inline option.
   // No selector, menu-opening click, native activation or caller-supplied target.
-  if (field?.control === 'inline_listbox_v1' && e?.isConnected) {
+  if (field?.control && e?.isConnected) {
     const choices = state.choices?.get(field.id);
     const safe = () => !!choices && e.isConnected && state.safeRead?.(field.id) && choices.valid();
     const error = () => e.getAttribute('aria-invalid') === 'true' || (e.getAttribute('aria-errormessage') ?? '').split(/\s+/).slice(0, 5).some((id) => { const n = (e.getRootNode() as Document | ShadowRoot).getElementById(id); return !!n && n.getClientRects().length > 0 && getComputedStyle(n).visibility !== 'hidden' && !!n.textContent?.trim(); });

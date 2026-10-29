@@ -1,4 +1,4 @@
-import { reviewReady } from '../domain/session';
+import { finalReviewReady } from '../domain/session';
 import { pending } from '../attention/queue';
 import { useEffect, useState } from 'react';
 import { browser } from 'wxt/browser';
@@ -41,7 +41,7 @@ export function SessionControls({ checkpoint: cp, onChange }: { checkpoint: Sess
       {!terminal(cp) && (cp.lifecycle === 'PAUSED' || cp.recovery?.inspectionRequired) && <button disabled={busy || cp.recovery?.reattachRequired || cp.access?.status !== 'ready'} onClick={() => void action('RESUME_SESSION')}>Resume and reinspect</button>}
       {!terminal(cp) && <button disabled={busy} onClick={() => void action('CANCEL_SESSION')}>Cancel session</button>}
       {cp.lifecycle === 'READY_FOR_REVIEW' && <>
-        {cp.reviewScope !== 'final_review' && <button disabled={busy || !reviewReady(cp)} onClick={() => void action('FINAL_REVIEW')}>I am reviewing the final step</button>}
+        {cp.reviewScope !== 'final_review' && <button disabled={busy || !finalReviewReady(cp)} onClick={() => void action('FINAL_REVIEW')}>I am reviewing the final step</button>}
         <button disabled={busy} onClick={() => void action('FINISH_SESSION')}>Finish autofill session</button>
       </>}
       {cp.submission.status === 'unknown' && <button disabled={busy} onClick={() => void action('REPORT_SUBMISSION')}>I submitted it</button>}

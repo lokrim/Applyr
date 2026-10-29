@@ -5,6 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { build } from 'vite';
+import { expansionPattern } from './expansion-patterns';
 import { platformPattern } from './platform-patterns';
 
 const native = `<form id="application" aria-label="Job application">
@@ -19,6 +20,9 @@ const native = `<form id="application" aria-label="Job application">
 <form id="newsletter"><label>Email newsletter<input value="F05_UNRELATED_CANARY"></label></form><form id="search"><input type="search" value="F05_SEARCH_CANARY"></form>`;
 const fields = '<label>Full name<input name="name" required></label><label>Email<input name="email" type="email" required></label>';
 const pages: Record<string, string> = {
+  F14: expansionPattern('F14'), F15: expansionPattern('F15'), F16: expansionPattern('F16'), F17: expansionPattern('F17'), F18: expansionPattern('F18'),
+  'F14-cross': '<iframe title="Job application F14" src="CROSS/F14"></iframe>',
+  'F18-cross': '<iframe title="Job application F18" src="CROSS/F18"></iframe>',
   F12: platformPattern('F12'), F13: platformPattern('F13'),
   'F12-embedded': '<iframe title="Job application F12" src="/F12"></iframe>',
   'F13-embedded': '<iframe title="Job application F13" src="/F13"></iframe>',

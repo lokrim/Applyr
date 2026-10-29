@@ -112,3 +112,7 @@ footer p { font-size: 11px; margin: 4px 0; }
 #history li, [aria-label="Field review list"] li { border-top: 1px solid #dce2d8; padding: 12px 0; overflow-wrap: anywhere; }
 :where(.help, #history, #privacy) a { color: #314d3e; text-decoration: underline; }
 :where(.help, #history, #privacy) :is(summary, a):focus-visible { outline: 2px solid #b16421; outline-offset: 3px; }
+
+.compatibility-table { max-width: 100%; overflow-x: auto; margin: 12px 0; }
+.compatibility-table table { width: 100%; min-width: 560px; border-collapse: collapse; font-size: 13px; }
+.compatibility-table th, .compatibility-table td { border: 1px solid #c9d4c3; padding: 10px; text-align: left; vertical-align: top; }

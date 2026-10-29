@@ -4,7 +4,7 @@ import type { ApplyrDatabase } from '../storage/database';
 import { CheckpointStore, StaleCheckpointError } from '../storage/checkpoints';
 import { ProfileStore } from '../storage/profiles';
 import type { PageAccessService } from '../runtime/page-access';
-import { transition, terminal, reviewReady, type SessionCheckpoint } from '../domain/session';
+import { transition, terminal, finalReviewReady, type SessionCheckpoint } from '../domain/session';
 import type { SessionCorrection } from '../mapping/schema';
 import type { Inspection } from '../forms/schema';
 import { createDryRun, previewBinding } from '../mapping/rules';
@@ -31,7 +31,10 @@ export class AttentionService {
     if (JSON.stringify(cp.attention) !== JSON.stringify(attention) || JSON.stringify(cp.review) !== JSON.stringify(review)) {
       const gate = inspection.snapshot.unsupported.some((i) => ['login', 'otp', 'captcha', 'authentication'].includes(i.code));
       next = { ...(gate ? transition(cp, { type: 'INTERRUPT', reason: 'manual_challenge' }, Date.now()) : { ...cp, revision: cp.revision + 1, updatedAt: Date.now() }), attention, review, autofill: cp.autofill && review ? { ...cp.autofill, requiredUnresolved: review.items.filter((i) => i.required && !['accepted', 'manual'].includes(i.status)).length, unsupported: review.areas.reduce((n, a) => n + a.unsupported, 0) } : undefined };
-      if (next.reviewScope === 'final_review' && !reviewReady(next)) next.reviewScope = undefined;
+      const stepChanged = review?.areas.some((a) => a.step && a.step.signature !== cp.review?.areas.find((old) => old.frameId === a.frameId)?.step?.signature);
+      const fieldsChanged = review && cp.review && (review.items.length !== cp.review.items.length || review.items.some((item) => !cp.review!.items.some((old) => old.fieldId === item.fieldId && old.target.document === item.target.document && old.target.signature === item.target.signature)));
+      if (stepChanged || fieldsChanged || next.reviewScope === 'final_review' && !finalReviewReady(next)) next.reviewScope = undefined;
+      if (review?.areas.some((a) => a.step?.loop)) next = { ...transition(next, { type: 'INTERRUPT', reason: 'branch_loop' }, Date.now()), lifecycle: 'PAUSED', autofill: next.autofill ? { ...next.autofill, status: 'interrupted' } : undefined };
       await new CheckpointStore(db).replace(next, { sessionId: cp.id, revision: cp.revision });
       this.deps.changed();
     }

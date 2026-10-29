@@ -21,7 +21,7 @@ export const test = base.extend<{ platformGrants: boolean; aiProviderGrants: boo
     // Same production JavaScript; test-only install grant to one loopback HOST.
     // This host pattern omits the port and matches all ports; localhost stays denied.
     if (notificationGrants) manifest.permissions.push('notifications');
-    manifest.host_permissions = ['https://127.0.0.1/*', ...(platformGrants ? ['https://job-boards.greenhouse.io/*', 'https://jobs.lever.co/*'] : []), ...(aiProviderGrants ? ['https://api.openai.com/*'] : [])];
+    manifest.host_permissions = ['https://127.0.0.1/*', ...(platformGrants ? ['https://job-boards.greenhouse.io/*', 'https://jobs.lever.co/*', 'https://docs.google.com/*', 'https://jobs.ashbyhq.com/*', 'https://jobs.smartrecruiters.com/*', 'https://apply.workable.com/*', 'https://fiction.wd1.myworkdayjobs.com/*'] : []), ...(aiProviderGrants ? ['https://api.openai.com/*'] : [])];
     await writeFile(manifestPath, JSON.stringify(manifest));
     const context = await chromium.launchPersistentContext(path.join(directory, 'profile'), {
       channel: 'chromium', headless: true, ignoreHTTPSErrors: true,

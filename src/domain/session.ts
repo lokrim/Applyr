@@ -80,6 +80,9 @@ export function reviewReady(s: SessionCheckpoint) {
     && s.autofill.requiredUnresolved === 0 && s.autofill.unsupported === 0
     && !s.review.items.some((i) => i.status === 'rejected' || i.status === 'unverified' || (i.required && i.status === 'unresolved'));
 }
+export function finalReviewReady(s: SessionCheckpoint) {
+  return reviewReady(s) && !s.review?.areas.some((a) => a.step?.hasNext || a.step?.loop);
+}
 export type SessionEvent =
   | { type: 'START'; lease: NonNullable<SessionCheckpoint['lease']> }
   | { type: 'PHASE'; phase: Exclude<Phase, 'SETUP'> }
@@ -107,7 +110,7 @@ export function transition(s: SessionCheckpoint, event: SessionEvent, now: numbe
       if (s.recovery?.reattachRequired) throw new Error('ACCESS_UNAVAILABLE');
       next = { ...next, lifecycle: 'QUEUED', phase: 'INSPECTING', reviewScope: undefined, pauseRequested: false, lease: undefined, approval: undefined, recovery: { reason: 'resumed', inspectionRequired: true, reattachRequired: false } }; break;
     case 'REVIEW':
-      if (event.scope === 'final_review' && !reviewReady(s)) throw new Error('ACCESS_UNAVAILABLE');
+      if (event.scope === 'final_review' && !finalReviewReady(s)) throw new Error('ACCESS_UNAVAILABLE');
       next = { ...next, lifecycle: 'READY_FOR_REVIEW', phase: 'VALIDATING', reviewScope: event.scope ?? 'current_step', lease: undefined }; break;
     case 'INTERRUPT': next = { ...next, lifecycle: s.lifecycle === 'PAUSED' ? 'PAUSED' : 'NEEDS_ATTENTION', reviewScope: undefined, pauseRequested: false, lease: undefined, approval: undefined, recovery: { reason: event.reason, inspectionRequired: true, reattachRequired: !!event.reattach }, aiRequest: s.aiRequest?.status === 'pending' ? { ...s.aiRequest, status: 'uncertain' } : s.aiRequest }; break;
     case 'CANCEL': next = { ...next, lifecycle: 'CANCELLED', pauseRequested: false, lease: undefined, approval: undefined, aiRequest: s.aiRequest?.status === 'pending' ? { ...s.aiRequest, status: 'uncertain' } : s.aiRequest }; break;

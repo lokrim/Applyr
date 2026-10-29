@@ -67,17 +67,18 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
   const token = (e: Element) => {
     const c = e as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
     return JSON.stringify([metadataToken(e), Array.from(e.attributes).map((a) => [a.name, a.value]),
-      c instanceof HTMLSelectElement ? Array.from(c.options).map((o) => [o.value, o.label, o.disabled, o.selected, !!o.closest('optgroup[disabled]')]) : c instanceof HTMLInputElement && c.type === 'file' ? Array.from(c.files ?? []).map((f) => [f.name, f.size, f.lastModified]) : e.matches('div[role="listbox"]') ? Array.from(e.children).map((o) => [identify(o), o.getAttribute('aria-selected'), nodeText(o), Array.from(o.attributes).map((a) => [a.name, a.value])]) : c.value,
+      c instanceof HTMLSelectElement ? Array.from(c.options).map((o) => [o.value, o.label, o.disabled, o.selected, !!o.closest('optgroup[disabled]')]) : c instanceof HTMLInputElement && c.type === 'file' ? Array.from(c.files ?? []).map((f) => [f.name, f.size, f.lastModified]) : e.matches('div[role="listbox"],div[role="radiogroup"]') ? Array.from(e.children).map((o) => [identify(o), o.getAttribute('aria-selected'), o.getAttribute('aria-checked'), nodeText(o), Array.from(o.attributes).map((a) => [a.name, a.value])]) : c.value,
       c instanceof HTMLInputElement && ['radio', 'checkbox'].includes(c.type) ? c.checked : null]);
   };
   const finalAction = /\b(next|submit|accept|agree|consent|finish|finaliz\w*|continue|send application|apply now|ignore all|send keys|execute|javascript)\b|[<>]/i;
   const inlineOptions = (e: Element): Element[] => {
     // Bubbling must not reach a surrounding button/link/label activation area.
     for (let p: Element | null = e; p; p = parent(p)) if (p.matches('button,a,label,summary,[role="button"],[role="link"]')) return [];
-    if (!e.matches('div[role="listbox"]') || e.getAttribute('aria-disabled') === 'true' || e.getAttribute('aria-readonly') === 'true' || !!e.shadowRoot || e.getAttribute('aria-multiselectable') === 'true' || e.hasAttribute('aria-owns') || e.hasAttribute('aria-controls') || e.hasAttribute('contenteditable')) return [];
+    const radio = e.matches('div[role="radiogroup"]'), attr = radio ? 'aria-checked' : 'aria-selected';
+    if (!e.matches('div[role="listbox"],div[role="radiogroup"]') || e.getAttribute('aria-disabled') === 'true' || e.getAttribute('aria-readonly') === 'true' || !!e.shadowRoot || e.getAttribute('aria-multiselectable') === 'true' || e.hasAttribute('aria-owns') || e.hasAttribute('aria-controls') || e.hasAttribute('contenteditable')) return [];
     const options = Array.from(e.children);
-    if (!options.length || options.length > 100 || options.some((o) => !o.matches('div[role="option"]') || !visible(o) || o.children.length > 0 || !!o.shadowRoot || !['true', 'false'].includes(o.getAttribute('aria-selected') ?? '') || o.getAttribute('tabindex') === '-1' || !nodeText(o) || finalAction.test(nodeText(o)) || o.hasAttribute('aria-label') || o.hasAttribute('aria-labelledby') || o.hasAttribute('onclick') || o.hasAttribute('contenteditable') || o.hasAttribute('aria-controls') || o.hasAttribute('aria-owns'))) return [];
-    if (new Set(options.map((o) => nodeText(o).toLowerCase())).size !== options.length || options.filter((o) => o.getAttribute('aria-selected') === 'true').length > 1) return [];
+    if (!options.length || options.length > 100 || options.some((o) => !o.matches(radio ? 'div[role="radio"]' : 'div[role="option"]') || !visible(o) || o.children.length > 0 || !!o.shadowRoot || !['true', 'false'].includes(o.getAttribute(attr) ?? '') || (!radio && o.getAttribute('tabindex') === '-1') || !nodeText(o) || finalAction.test(nodeText(o)) || o.hasAttribute('aria-label') || o.hasAttribute('aria-labelledby') || o.hasAttribute('onclick') || o.hasAttribute('contenteditable') || o.hasAttribute('aria-controls') || o.hasAttribute('aria-owns'))) return [];
+    if (new Set(options.map((o) => nodeText(o).toLowerCase())).size !== options.length || options.filter((o) => o.getAttribute(attr) === 'true').length > 1) return [];
     return options;
   };
   let mutations = 0, scans = 0;
@@ -109,7 +110,7 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
     walk(document, 0);
     const metadata = (e: Element) => `${e.getAttribute('aria-label') ?? ''} ${refs(e, 'aria-labelledby')} ${e.id} ${e.getAttribute('name') ?? ''}`;
     const context = `${document.title} ${elements.filter((e) => e.matches('h1,h2') && visible(e)).slice(0, 8).map(nodeText).join(' ')}`;
-    const controls = elements.filter((e) => e.matches('input,select,textarea,[role="combobox"],[role="listbox"],[role="checkbox"],[role="radio"],[role="textbox"],[contenteditable="true"],canvas') && visible(e));
+    const controls = elements.filter((e) => e.matches('input,select,textarea,[role="combobox"],[role="listbox"],[role="radiogroup"],[role="checkbox"],[role="radio"],[role="textbox"],[contenteditable="true"],canvas') && visible(e));
     const owner = (e: Element): Element | null => {
       if ('form' in e && (e as HTMLInputElement).form) return (e as HTMLInputElement).form;
       for (let p = parent(e); p; p = parent(p)) if (p.matches('form,[role="form"]')) return p;
@@ -127,7 +128,20 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
     const ghPath = /^\/[a-zA-Z0-9_-]+\/jobs\/\d+\/?$/.test(url.pathname) || (url.pathname === '/embed/job_app' && /^[a-zA-Z0-9_-]+$/.test(url.searchParams.get('for') ?? '') && /^\d+$/.test(url.searchParams.get('token') ?? ''));
     const gh = secure && ['boards.greenhouse.io', 'job-boards.greenhouse.io'].includes(url.hostname) && ghPath && selected?.matches('form#application_form') && ['first_name', 'last_name', 'email', 'resume'].every((n) => names.includes(n));
     const lever = secure && ['jobs.lever.co', 'jobs.eu.lever.co'].includes(url.hostname) && /^\/[a-zA-Z0-9_-]+\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\/apply\/?$/i.test(url.pathname) && selected?.matches('form.application-form') && ['name', 'email', 'resume'].every((n) => names.includes(n));
-    const adapter: NonNullable<FormSnapshot['adapter']> = { id: gh ? 'greenhouse' : lever ? 'lever' : 'generic', version: '1.0.0', recognition: gh || lever ? 'host_path_form' : 'generic', evidence: 'owned_fixtures_only' };
+    // These are conservative URL + semantic pattern recognizers, not claims
+    // about live provider DOM. Only the existing field registry grants writes.
+    const contacts = selected ? controls.filter((c) => owner(c) === selected && c.matches('input') && visible(c)).map((c) => `${name(c).label} ${c.getAttribute('autocomplete') ?? ''}`) : [];
+    const application = selected && job.test(name(selected).label || metadata(selected)) && contacts.some((n) => /\b(?:full name|first name|given-name|name)\b/i.test(n)) && contacts.some((n) => /\bemail\b/i.test(n));
+    const formsPath = /^\/forms\/d\/(?:e\/)?[a-zA-Z0-9_-]+\/viewform\/?$/.test(url.pathname);
+    const google = secure && url.hostname === 'docs.google.com' && formsPath && application;
+    const ashby = secure && url.hostname === 'jobs.ashbyhq.com' && /^\/[a-zA-Z0-9_-]+\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(?:\/application)?\/?$/i.test(url.pathname) && application;
+    const smart = secure && url.hostname === 'jobs.smartrecruiters.com' && /^\/[a-zA-Z0-9_-]+\/\d{6,}(?:-[a-zA-Z0-9_-]+)?\/?$/.test(url.pathname) && application;
+    const workable = secure && url.hostname === 'apply.workable.com' && /^\/[a-zA-Z0-9_-]+\/j\/[a-zA-Z0-9]+\/apply\/?$/.test(url.pathname) && application;
+    const workday = secure && /^[a-z0-9-]+\.wd\d{1,3}\.myworkdayjobs\.com$/.test(url.hostname) && /^\/(?:[a-z]{2}-[A-Z]{2}\/)?[a-zA-Z0-9_-]+\/job\/[a-zA-Z0-9_/-]+\/apply\/?$/.test(url.pathname) && application;
+    const adapter: NonNullable<FormSnapshot['adapter']> = { id: gh ? 'greenhouse' : lever ? 'lever' : google ? 'google_forms' : ashby ? 'ashby' : smart ? 'smartrecruiters' : workable ? 'workable' : workday ? 'workday' : 'generic', version: '1.0.0', recognition: gh || lever || google || ashby || smart || workable || workday ? 'host_path_form' : 'generic', evidence: 'owned_fixtures_only' };
+    // Known expansion surfaces restrict uploads even when context recognition
+    // remains generic. A host can deny a capability, never grant one.
+    const manualUploads = secure && (url.hostname === 'docs.google.com' && formsPath || ['jobs.ashbyhq.com', 'jobs.smartrecruiters.com', 'apply.workable.com'].includes(url.hostname) || /^[a-z0-9-]+\.wd\d{1,3}\.myworkdayjobs\.com$/.test(url.hostname));
     const fields: FormSnapshot['fields'] = [], unsupported: FormSnapshot['unsupported'] = [];
     const add = (code: FormSnapshot['unsupported'][number]['code'], label: string) => { if (unsupported.length < 99) unsupported.push({ code, label: clean(label) }); else limited = true; };
     if (!forms.length) add('no_relevant_form', 'No relevant application form found.');
@@ -139,7 +153,9 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
     if (challenge) add('captcha', 'Complete the challenge on the original page, then reinspect.');
     if (otp) add('otp', 'Complete code verification on the original page, then reinspect.');
     else if (login) add('login', 'Sign in on the original page, then reinspect.');
-    const gated = challenge || selected && controls.some((c) => owner(c) === selected && (c.matches('input[type="password"]') || auth.test(`${metadata(c)} ${name(c).label} ${c.getAttribute('autocomplete') ?? ''}`)));
+    const account = elements.some((e) => visible(e) && e.matches('a[href],button,[role="button"]') && /^(?:sign in|log in)(?: to (?:google|continue|apply))?$/i.test(nodeText(e)));
+    if (account) add('login', 'Handle account sign-in on the original page, then reinspect.');
+    const gated = account || challenge || selected && controls.some((c) => owner(c) === selected && (c.matches('input[type="password"]') || auth.test(`${metadata(c)} ${name(c).label} ${c.getAttribute('autocomplete') ?? ''}`)));
     if (gated) add('authentication', 'Complete authentication or payment gates manually, then reinspect. No control values read from this form.');
     if (selected && !gated) {
       for (const e of elements) {
@@ -147,7 +163,7 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
         if (e.matches('input[type="file"]') && !visible(e) && Array.from((e as HTMLInputElement).labels ?? []).some(visible)) add('custom_control', name(e).label || 'Hidden file picker requires manual upload.');
         if (!visible(e)) continue;
         if (e.localName.includes('-') && !e.shadowRoot) add('opaque_custom_element', name(e).label || 'Opaque custom element; a closed root cannot be inspected.');
-        if (e.matches('[role="button"]') && /upload|resume|attach|dropzone|file/i.test(metadata(e))) add('custom_control', name(e).label || 'Custom file widget requires manual upload.');
+        if (e.matches('button,[role="button"]') && /upload|resume|attach|dropzone|file/i.test(`${metadata(e)} ${nodeText(e)}`)) add('custom_control', name(e).label || 'Custom file widget requires manual upload.');
       }
       for (const e of controls.filter((c) => owner(c) === selected)) {
         const named = name(e);
@@ -155,12 +171,18 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
         for (let p = parent(e); p && p !== selected; p = parent(p)) if (p.matches('fieldset') && context.length < 5) { const legend = Array.from(p.children).find((c) => c.matches('legend')); const text = nodeText(legend ?? null); if (text) context.unshift(text); }
         const type = e instanceof HTMLInputElement ? e.type : e.localName;
         const semantics = `${metadata(e)} ${named.label} ${context.join(' ')} ${e.getAttribute('autocomplete') ?? ''}`;
+        if (e.matches('[role="radio"]') && e.parentElement?.matches('div[role="radiogroup"]')) continue;
+        if (context.some((text) => /education|employment history|work history|work experience|repeat(?:ed|able) records/i.test(text)) && e.closest('fieldset') && Array.from(e.closest('fieldset')!.querySelectorAll('button,[role="button"]')).some((b) => visible(b) && /^add\b/i.test(nodeText(b)))) {
+          if (!unsupported.some((u) => u.code === 'repeated_history' && u.label === context.join(' / '))) add('repeated_history', context.join(' / '));
+          continue;
+        }
         if (e.matches('input[type="hidden"]') || ['submit', 'reset', 'button', 'image'].includes(type)) continue;
         if (type === 'password' || auth.test(semantics)) { add('authentication', 'Authentication or payment control excluded; no value read.'); continue; }
         if (e.matches('[contenteditable="true"]')) { add('rich_text', named.label || 'Rich text requires manual entry.'); continue; }
         if (e.matches('canvas')) { add('canvas', named.label || 'Canvas control is inaccessible.'); continue; }
         if (fields.length >= 100) { limited = true; break; }
-        if (e.matches('div[role="listbox"]')) {
+        if (e.matches('div[role="listbox"],div[role="radiogroup"]')) {
+          const radio = e.matches('[role="radiogroup"]'), attr = radio ? 'aria-checked' : 'aria-selected';
           const members = inlineOptions(e);
           if (!members.length || !named.label || finalAction.test(named.label)) { add('custom_control', named.label || 'Ambiguous inline choices; choose on the page.'); continue; }
           const text = `${semantics} ${members.map(nodeText).join(' ')}`;
@@ -168,13 +190,13 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
           const options = await Promise.all(members.map(async (o) => ({ label: nodeText(o), fingerprint: await opaque(identify(o)), disabled: o.getAttribute('aria-disabled') === 'true' })));
           const host = new WeakRef(e), memberRefs = members.map((o) => new WeakRef(o));
           const readMembers = () => memberRefs.map((ref) => ref.deref()).filter((o): o is Element => !!o);
-          const read = () => readMembers().filter((o) => o.getAttribute('aria-selected') === 'true').map(identify).join('|');
-          const memberMetadata = () => JSON.stringify(readMembers().map((o) => [nodeText(o), Array.from(o.attributes).filter((a) => a.name !== 'aria-selected').map((a) => [a.name, a.value])]));
+          const read = () => readMembers().filter((o) => o.getAttribute(attr) === 'true').map(identify).join('|');
+          const memberMetadata = () => JSON.stringify(readMembers().map((o) => [nodeText(o), Array.from(o.attributes).filter((a) => a.name !== attr).map((a) => [a.name, a.value])]));
           const originalMemberMetadata = memberMetadata();
           const id = identify(e);
           state.choices!.set(id, { read, valid: () => { const h = host.deref(), fresh = h ? inlineOptions(h) : []; return memberMetadata() === originalMemberMetadata && fresh.length === memberRefs.length && fresh.every((o, i) => o === memberRefs[i]?.deref()); },
             choose: (fingerprint) => { const h = host.deref(), index = options.findIndex((o) => o.fingerprint === fingerprint && !o.disabled), option = memberRefs[index]?.deref(); if (!h || !option || !inlineOptions(h).includes(option)) return false; option.dispatchEvent(new Event('click', { bubbles: true })); return true; } });
-          fields.push({ id, ...named, context, type: 'select', control: 'inline_listbox_v1', autocomplete: '', required: e.getAttribute('aria-required') === 'true', executable: category === 'choice', category, filePurpose: null,
+          fields.push({ id, ...named, context, type: 'select', control: radio ? 'inline_radio_v1' : 'inline_listbox_v1', autocomplete: '', required: e.getAttribute('aria-required') === 'true', executable: category === 'choice', category, filePurpose: null,
             constraints: { min: '', max: '', step: '', minLength: '', maxLength: '', pattern: '', accept: '', multiple: false }, options,
             current: { fingerprint: await opaque(read()), present: !!read() }, validation: { valid: null, flags: [], ariaInvalid: e.getAttribute('aria-invalid') === 'true', errorPresent: !!refs(e, 'aria-errormessage') } });
           continue;
@@ -188,6 +210,7 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
           : /gender|race|ethnic|disabil|veteran|sexual|religio|citizen|visa|sponsor|work authori[sz]|authori[sz](?:ed|ation).*work|eligib|salary|compensation|criminal|birth/i.test(semantics) ? 'sensitive'
             : ['select', 'radio'].includes(type) ? 'choice' : type === 'checkbox' ? 'preference' : type === 'textarea' ? 'long_answer' : 'short_answer';
         if (!named.label || named.labelSource === 'placeholder') category = 'missing_semantics';
+        if (type === 'file' && manualUploads) add('manual_upload', named.label || 'Upload files on the original page.');
         const filePurpose = type !== 'file' ? null : /resume|résumé|\bcv\b/i.test(semantics) ? 'resume' : /cover/i.test(semantics) ? 'cover_letter' : /portfolio/i.test(semantics) ? 'portfolio' : /transcript/i.test(semantics) ? 'transcript' : 'unknown';
         let radioPeers = type === 'radio' && (control as HTMLInputElement).name ? controls.filter((c) => c instanceof HTMLInputElement && c.type === 'radio' && c.name === (control as HTMLInputElement).name && c.form === (control as HTMLInputElement).form && c.getRootNode() === control.getRootNode()) as HTMLInputElement[] : [];
         // Hidden/uninspected group members may already hold an answer. Inspect
@@ -201,7 +224,7 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
         if (type === 'checkbox') options.push({ label: named.label, fingerprint: await opaque((control as HTMLInputElement).value), disabled: false });
         if (type === 'radio') for (const peer of radioPeers) options.push({ label: name(peer).label, fingerprint: await opaque(peer.value), disabled: peer.disabled });
         fields.push({ id: identify(e), ...named, context, type: type as FormSnapshot['fields'][number]['type'], autocomplete: clean(e.getAttribute('autocomplete')), required: control.required || e.getAttribute('aria-required') === 'true', category, filePurpose,
-          executable: !['declaration', 'sensitive', 'missing_semantics'].includes(category) && (type !== 'file' || filePurpose === 'resume') && (type !== 'radio' || radioPeers.length > 0),
+          executable: !['declaration', 'sensitive', 'missing_semantics'].includes(category) && (type !== 'file' || (filePurpose === 'resume' && !manualUploads)) && (type !== 'radio' || radioPeers.length > 0),
           constraints: { min: clean(e.getAttribute('min')), max: clean(e.getAttribute('max')), step: clean(e.getAttribute('step')), minLength: clean(e.getAttribute('minlength')), maxLength: clean(e.getAttribute('maxlength')), pattern: clean(e.getAttribute('pattern')), accept: clean(e.getAttribute('accept')), multiple: e.hasAttribute('multiple') }, options,
           ...(radioPeers.length ? { radioGroup: { primary: identify(radioPeers[0]!), label: context.at(-1) ?? '', present: radioPeers.some((c) => c.checked) } } : {}),
           current: { fingerprint: await opaque(value), present: type === 'radio' ? radioPeers.some((c) => c.checked) : type === 'checkbox' ? (control as HTMLInputElement).checked : value.length > 0 || (control instanceof HTMLSelectElement && Array.from(control.selectedOptions).some((o) => !!o.label.trim() && !/^(?:choose(?: an option)?|select(?: an option)?|please (?:choose|select)(?: an option)?|--+|\s*)[.\s-]*$/i.test(o.label))) },
@@ -213,7 +236,8 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
     }
     currentControls = controls;
     if (limited) add('limit', 'Inspection bound reached; complete unsupported areas manually.');
-    return { schemaVersion: 1, adapter, identity: expectedIdentity, document: state.document, status: stale ? 'stale_selection' : !selected && forms.length > 1 ? 'selection_required' : 'stable', selectedForm: selected ? identify(selected) : null, forms, fields, unsupported };
+    const step = selected && !gated ? { signature: await hash(JSON.stringify([name(selected).label, elements.filter((e) => owner(e) === selected && e.matches('h2,h3,legend') && visible(e)).map(nodeText), fields.map((f) => [f.label, f.context, f.type, f.options.map((o) => o.label)]), unsupported])), hasNext: elements.some((e) => owner(e) === selected && visible(e) && e.matches('button,[role="button"],input[type="button"],input[type="submit"]') && /^(?:next|continue)(?: step| section)?$/i.test(e instanceof HTMLInputElement ? e.getAttribute('value') ?? '' : nodeText(e))) } : undefined;
+    return { schemaVersion: 1, adapter, ...(step ? { step } : {}), identity: expectedIdentity, document: state.document, status: stale ? 'stale_selection' : !selected && forms.length > 1 ? 'selection_required' : 'stable', selectedForm: selected ? identify(selected) : null, forms, fields, unsupported };
   };
   try {
     let result = await scan(), signature = JSON.stringify(result), stable = false;
@@ -242,7 +266,7 @@ export async function inspectForm(expectedIdentity: string, frameUrl: string | n
     const roots = [...observed].map((r) => new WeakRef(r as Document | ShadowRoot));
     // Metadata only for excluded controls: detects a newly visible auth gate or
     // a new field without ever reading its answer, hidden token or file bytes.
-    const structure = () => JSON.stringify(roots.map((r) => Array.from(r.deref()?.querySelectorAll('input,select,textarea,form,fieldset,legend,[role="listbox"],[role="option"]') ?? []).slice(0, 3000).map((e) => [identify(e), metadataToken(e), e.matches('legend') ? nodeText(e) : ''])));
+    const structure = () => JSON.stringify(roots.map((r) => Array.from(r.deref()?.querySelectorAll('input,select,textarea,form,fieldset,legend,[role="listbox"],[role="option"],[role="radiogroup"],[role="radio"]') ?? []).slice(0, 3000).map((e) => [identify(e), metadataToken(e), e.matches('legend') ? nodeText(e) : ''])));
     const originalStructure = structure();
     state.guard = () => structure() === originalStructure && guards.every((g) => { const e = g.ref.deref(); return !!e && token(e) === g.token; });
     // Post-render reads must also abstain if a formerly safe control becomes a

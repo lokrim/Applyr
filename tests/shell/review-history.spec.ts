@@ -57,10 +57,18 @@ test('AC-19/20 actual review counts, manual repair, blocked final review, indepe
   await session.getByRole('button', { name: 'Finish autofill session', exact: true }).click();
   await expect(session.getByRole('heading', { name: 'Session: autofill finished', exact: true })).toBeVisible();
   cp = await current(session); expect(cp.submission.status).toBe('unknown'); expect((await stores(session)).profiles).toEqual([]);
+  expect(await source.evaluate(() => (window as unknown as { fixture: { finalizations: number } }).fixture.finalizations)).toBe(0);
+  // Explicit test-driver user action on the owned fixture only. Its submit
+  // handler prevents navigation/network; the extension never clicks this.
+  await source.evaluate(() => { const button = document.createElement('button'); button.type = 'submit'; button.textContent = 'User submits owned fixture'; document.querySelector('form')!.append(button); });
+  await source.getByRole('button', { name: 'User submits owned fixture', exact: true }).click();
+  expect(await source.evaluate(() => (window as unknown as { fixture: { finalizations: number } }).fixture.finalizations)).toBe(1);
+  expect((await current(session)).submission.status).toBe('unknown');
   await session.getByRole('button', { name: 'I submitted it', exact: true }).click();
   await expect.poll(async () => (await current(session)).submission.status).toBe('reported_by_user');
   cp = await current(session); expect(cp.submission).toMatchObject({ status: 'reported_by_user', source: 'user', reportedAt: expect.any(Number) });
-  expect(await source.evaluate(() => (window as unknown as { fixture: { finalizations: number } }).fixture.finalizations)).toBe(0);
+  expect(await source.evaluate(() => (window as unknown as { fixture: { finalizations: number } }).fixture.finalizations)).toBe(1);
+  expect(fixtures.requests.every((r) => r.method === 'GET')).toBe(true);
 });
 
 test('AC-16 duplicate tracking URLs require view/resume or deliberate separate-run before a new tab/session', async ({ inspector }) => {

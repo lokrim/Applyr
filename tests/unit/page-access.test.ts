@@ -97,6 +97,22 @@ describe('page identity and scoped read-only access', () => {
     await service.event(null, 'restart'); expect((await store.read())?.access?.reason).toBe('restart');
   });
 
+  it.each(['closed', 'restart'] as const)('deduplicates an already durable %s event without changing recovery authority', async (reason) => {
+    await service.event(7, reason);
+    const blocked = (await store.read())!;
+    expect(blocked.access).toMatchObject({ status: 'needs_attention', reason });
+    expect(blocked.recovery?.reattachRequired).toBe(true);
+    changed.mockClear();
+    await Promise.all([service.event(7, reason), service.event(null, reason)]);
+    expect(await store.read()).toEqual(blocked); expect(changed).not.toHaveBeenCalled();
+    expect(createTab).not.toHaveBeenCalled(); expect(probe).not.toHaveBeenCalled();
+    // Actual new information still invalidates this revision.
+    await service.event(7, reason === 'closed' ? 'restart' : 'closed');
+    expect((await store.read())?.revision).toBe(blocked.revision + 1);
+    await expect(service.open({ sessionId: blocked.id, revision: blocked.revision }, 'https://jobs.example/new')).rejects.toThrow(StaleCheckpointError);
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
   it('handles denied/revoked access without leaking browser errors or requesting more access', async () => {
     probe.mockRejectedValue(new Error('https://secret.invalid/?token=canary'));
     checkpoint = await service.probe(binding());

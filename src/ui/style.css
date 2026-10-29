@@ -2,7 +2,7 @@
 * { box-sizing: border-box; }
 body { margin: 0; }
 .shell { padding: 28px 22px; max-width: 650px; margin: 0 auto; }
-.popup { width: 390px; padding: 22px 20px; }
+.popup { width: 390px; max-width: 100%; padding: 22px 20px; }
 header { display: flex; gap: 12px; align-items: center; padding-bottom: 28px; }
 .brand-mark { display: grid; place-items: center; width: 42px; height: 42px; flex-shrink: 0; border-radius: 13px 13px 13px 3px; background: #254f3c; color: #fff; font-size: 30px; font-weight: 750; }
 .brand { font-weight: 750; font-size: 23px; letter-spacing: -1px; margin: 0; }

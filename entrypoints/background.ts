@@ -1,3 +1,4 @@
+import '../src/security/schema-policy';
 import { deleteLocalData } from '../src/storage/data-controls';
 import { notifyProfileDeletion } from '../src/browser/profile-events';
 import { notifyDocumentChange, onDocumentChange } from '../src/browser/document-events';

@@ -154,6 +154,10 @@ export class PageAccessService {
     for (let attempt = 0; attempt < 3; attempt++) {
       const checkpoint = await (await this.deps.store()).read();
       if (!checkpoint || (tabId !== null && checkpoint.target.tabId !== tabId)) return;
+      // A passive missing-tab read and onRemoved can observe the same closure.
+      // Once durably blocked, duplicate terminal access events must not churn
+      // the revision while a user explicitly opens or reattaches a target.
+      if (checkpoint.access?.status === 'needs_attention' && checkpoint.access.reason === reason && ['closed', 'restart'].includes(reason)) return;
       if (['closed', 'restart', 'navigation'].includes(checkpoint.access?.reason ?? '') && !['closed', 'restart'].includes(reason)) return;
       try { await this.attention(checkpoint, reason); return; }
       catch (error) { if (!(error instanceof StaleCheckpointError)) throw error; }

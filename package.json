@@ -17,6 +17,7 @@
     "test": "vitest run",
     "test:shell": "npm run build && playwright test",
     "check:manifests": "node scripts/check-manifests.mjs",
+    "check:release": "node scripts/check-release.mjs",
     "check": "npm run typecheck && npm run lint && npm test && npm run build && npm run build:firefox && npm run check:manifests",
     "postinstall": "wxt prepare"
   },

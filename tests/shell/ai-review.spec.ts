@@ -108,3 +108,52 @@ test('F11 packaged essay and mapping batch: source review, edit/approve/reject, 
   expect(await source.evaluate(() => (window as unknown as { fixture: { finalizations: number } }).fixture.finalizations)).toBe(0);
 
 });
+
+test('F11 actual worker loss during a journaled provider attempt does not replay or recover stale approval', async ({ inspector }, info) => {
+  const { context, source, fixtures } = inspector;
+  await source.goto(`${fixtures.origin}/F01`);
+  const popup = await inspector.popup(); await expect(popup.getByTestId('page-classification')).toHaveText('application');
+  const session = await context.newPage(); await session.goto(popup.url().replace('popup.html', 'session.html'));
+  await session.locator('.profile-workspace input[type=file]').setInputFiles({ name: 'fictional-ai.md', mimeType: 'text/markdown', buffer: Buffer.from(profile) });
+  await session.getByRole('button', { name: 'Freeze profile for this session', exact: true }).click(); await expect(session.getByTestId('frozen-profile-state')).toBeVisible();
+  const worker = context.serviceWorkers()[0]!;
+  await worker.evaluate((success) => {
+    globalThis.fetch = async (_url, init) => {
+      if (!String(init?.body).includes('Task data: ')) return new Response(JSON.stringify(success));
+      // Test-only durable transport counter: the request reached the mock before
+      // worker termination, while the production result is still unknown.
+      const key = 'p15-mock-candidate-attempts';
+      await chrome.storage.session.set({ [key]: Number((await chrome.storage.session.get(key))[key] ?? 0) + 1 });
+      return new Promise<Response>(() => {});
+    };
+  }, providerSuccess('openai'));
+  const options = await context.newPage(); await options.goto(popup.url().replace('popup.html', 'options.html'));
+  expect(await send(options, { type: 'SAVE', provider: 'openai', config: { schemaVersion: 1, provider: 'openai', revision: 0, model: 'mock-model', workspace: '', remember: false, candidateConsent: false, paidServiceConfirmed: false }, key: CREDENTIAL_CANARY })).toMatchObject({ ok: true });
+  const status = await send(options, { type: 'STATUS', provider: 'openai' });
+  expect(await send(options, { type: 'SAVE', provider: 'openai', config: { ...status.view.config, candidateConsent: true } })).toMatchObject({ ok: true });
+  expect(await send(options, { type: 'TEST', provider: 'openai', revision: 2 })).toMatchObject({ ok: true });
+  await session.getByRole('button', { name: 'Inspect fields', exact: true }).click();
+  const ai = session.getByTestId('ai-review'); await ai.getByLabel('AI provider', { exact: true }).selectOption('openai');
+  await ai.getByLabel('Request wording draft', { exact: true }).check(); await ai.getByLabel('Include projects.board.description', { exact: true }).check();
+  const cdp = await context.newCDPSession(session), versions: { versionId: string; scriptURL: string; runningStatus: string }[] = [];
+  cdp.on('ServiceWorker.workerVersionUpdated', (event) => versions.push(...event.versions)); await cdp.send('ServiceWorker.enable');
+  await expect.poll(() => versions.some((v) => v.scriptURL.includes('background.js') && v.runningStatus === 'running')).toBe(true);
+  await ai.getByRole('button', { name: 'Request selected AI proposals (may charge)', exact: true }).click();
+  await expect.poll(async () => session.evaluate(async () => (await chrome.storage.session.get('p15-mock-candidate-attempts'))['p15-mock-candidate-attempts'])).toBe(1);
+  const read = () => session.evaluate(() => chrome.runtime.sendMessage({ schemaVersion: 1, requestId: crypto.randomUUID(), type: 'GET_STATE', sessionId: null, revision: null }));
+  const before = await read(); expect(before.checkpoint.aiRequest.status).toBe('pending');
+  // Prevent any real provider transport even if a restart regression tries it.
+  await context.setOffline(true);
+  const providerRequests: string[] = []; context.on('request', (r) => { if (r.url().startsWith('https://api.openai.com')) providerRequests.push(r.url()); });
+  await cdp.send('ServiceWorker.stopWorker', { versionId: versions.findLast((v) => v.scriptURL.includes('background.js') && v.runningStatus === 'running')!.versionId });
+  await options.close(); await session.reload();
+  const recovered = await read(); expect(recovered.checkpoint.aiRequest).toMatchObject({ id: before.checkpoint.aiRequest.id, status: 'uncertain' });
+  expect(recovered.checkpoint.providerRequests).toEqual([expect.objectContaining({ id: before.checkpoint.aiRequest.id, status: 'uncertain' })]);
+  expect(recovered.checkpoint.lifecycle).toBe('NEEDS_ATTENTION'); expect(recovered.checkpoint.reviewScope).not.toBe('final_review'); expect(recovered.checkpoint.submission.status).toBe('unknown');
+  await expect(session.getByTestId('ai-proposal')).toHaveCount(0);
+  expect(await session.evaluate(async () => (await chrome.storage.session.get('p15-mock-candidate-attempts'))['p15-mock-candidate-attempts'])).toBe(1);
+  expect(providerRequests).toEqual([]); await expect(source.getByLabel('Why this role?', { exact: true })).toHaveValue('');
+  expect(await source.evaluate(() => (window as unknown as { fixture: { finalizations: number } }).fixture.finalizations)).toBe(0);
+  await cdp.detach();
+  await info.attach('provider-worker-loss', { body: JSON.stringify({ browser: context.browser()!.version(), transport: 'mocked first attempt; network offline before worker stop', candidateAttempts: 1, automaticReplayAttempts: providerRequests.length, staleProposals: 0, finalizations: 0, recovered: recovered.checkpoint.aiRequest }), contentType: 'application/json' });
+});

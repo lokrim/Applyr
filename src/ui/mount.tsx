@@ -1,3 +1,4 @@
+import '../security/schema-policy';
 import { createRoot } from 'react-dom/client';
 import { App, type Surface } from './App';
 import { branding } from '../branding';
